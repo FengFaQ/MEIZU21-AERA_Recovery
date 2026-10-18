@@ -61,11 +61,40 @@ jobs:
           remove-docker-images: 'true'
           build-mount-path: /aosp
 
+      # THE actual root cause of every ENOSPC in this job.
+      #
+      # maximize-build-space runs 'mkfs.ext4 -m0' on the build volume, which
+      # defaults to one inode per 16 KB. For a 96 GB volume that is:
+      #   Creating filesystem with 25630720 4k blocks and 6414336 inodes
+      # A full AOSP 16 tree plus .repo/project-objects needs far more than
+      # 6.4 million inodes, so repo died with 'No space left on device' while
+      # df still reported 95 GB free and /aosp had only grown to 1.3 GB.
+      # Bytes were never the problem - inodes were.
+      #
+      # Re-create the filesystem with four times the inode density (-i 4096,
+      # one inode per 4 KB) before anything is written to it.
+      - name: Re-create /aosp with enough inodes for an AOSP tree
+        run: |
+          echo "=== before ==="
+          df -i /aosp
+          DEV=$(findmnt -no SOURCE /aosp)
+          echo "device backing /aosp: $DEV"
+          sudo umount /aosp
+          sudo mkfs.ext4 -F -m0 -i 4096 "$DEV"
+          sudo mount "$DEV" /aosp
+          sudo chown "$(id -u):$(id -g)" /aosp
+          echo "=== after ==="
+          df -i /aosp
+          df -h /aosp
+          touch /aosp/.writable && rm /aosp/.writable && echo "writable OK"
+
       - name: Report disk and memory
         run: |
           df -h /
+          df -i /
           df -h /mnt || true
           df -h /aosp
+          df -i /aosp
           free -h
           echo "cpus: $(nproc)"
           mount | grep -E ' /aosp ' || true
@@ -175,6 +204,7 @@ jobs:
           for i in 1 2 3; do
             echo "===== sync attempt $i (-j$SYNC_JOBS) ====="
             df -h /aosp | tail -1
+            df -i /aosp | tail -1
             free -m | head -2
             repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
@@ -182,7 +212,8 @@ jobs:
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
             grep -m5 -E 'error:|fatal:|No space left' /tmp/sync.log \
               | sed 's/^/::error::sync: /' || true
-            echo "::error::sync disk: $(df -h /aosp | tail -1)"
+            echo "::error::sync bytes: $(df -h /aosp | tail -1)"
+            echo "::error::sync inodes: $(df -i /aosp | tail -1)"
 
             if grep -q 'Cannot initialize work tree' /tmp/sync.log && [ "$i" -eq 1 ]; then
               echo "work-tree init failure: retrying with partial clone"
