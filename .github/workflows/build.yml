@@ -23,8 +23,8 @@ env:
   MANIFEST_BRANCH: main
   LUNCH_TARGET: twrp_m2461-bp2a-eng
   DEVICE_DIR: device/meizu/m2461
-  SRC: /aosp/source
-  MONO: /aosp/mono
+  SRC: /build/source
+  MONO: /build/mono
   SYNC_JOBS: '4'
 
 jobs:
@@ -34,122 +34,64 @@ jobs:
     timeout-minutes: 350
     steps:
       # ---------------------------------------------------------------- space
-      # Disk is the #1 killer here: an AOSP 16 tree plus its .repo object
-      # store overflows the stock 14 GB runner disk and the runner is killed
-      # Two different failures came from the same knob, in opposite directions:
-      #   run #1: default sizing     -> runner killed in repo sync (62 min)
-      #   run #3: root-reserve 4096  -> runner killed in the compile (48 min),
-      #                                 because / was only 4 GB
-      #   run #4: root-reserve 30 GB -> repo sync itself failed after 31 min,
-      #                                 because /aosp only got the remainder
+      # Nine runs of ENOSPC chasing condensed into one lesson: do not put the
+      # build tree on top of a loop-backed LVM volume.
       #
-      # The fix is to stop fighting over a fixed disk. / only needs enough for
-      # the runner user dirs, apt and small scratch; everything heavy (source
-      # tree, .repo, out/, and TMPDIR) is pointed at /aosp. 10 GB root, 4 GB
-      # /mnt and 4 GB swap leave the bulk (~66 GB) to the build volume.
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 10240
-          temp-reserve-mb: 4096
-          swap-size-mb: 4096
-          # overprovision-lvm was on and is the prime suspect for the phantom
-          # ENOSPC in run #9: it lets the LVM thin pool promise more than it
-          # can back, so df reports ~92 GB while actual writes hit the wall at
-          # ~1.3 GB. Keep it off so the advertised size is real.
-          overprovision-lvm: 'false'
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-          build-mount-path: /aosp
-
-      # THE actual root cause of every ENOSPC in this job.
+      # maximize-build-space fallocates /pv.img inside /, then mounts a
+      # filesystem made from it on /build. Every write to /build grows pv.img,
+      # which consumes the very filesystem pv.img lives in. The mount happily
+      # reports 90 GB free (that is the LVM size) while writes hit the wall as
+      # soon as pv.img cannot grow any further inside /. That is why run #9 and
+      # run #10 could not write a single project object with df showing 90 GB
+      # free and 25 M inodes free, and why a 40 GB dd test still passed while
+      # a real AOSP tree (409 projects, tens of GB, millions of files) did not.
       #
-      # maximize-build-space runs 'mkfs.ext4 -m0' on the build volume, which
-      # defaults to one inode per 16 KB. For a 96 GB volume that is:
-      #   Creating filesystem with 25630720 4k blocks and 6414336 inodes
-      # A full AOSP 16 tree plus .repo/project-objects needs far more than
-      # 6.4 million inodes, so repo died with 'No space left on device' while
-      # df still reported 95 GB free and /aosp had only grown to 1.3 GB.
-      # Bytes were never the problem - inodes were.
-      #
-      # Re-create the filesystem with four times the inode density (-i 4096,
-      # one inode per 4 KB) before anything is written to it.
-      - name: Re-create /aosp with enough inodes for an AOSP tree
+      # The runner's own / volume is already 145 GB with ~100 GB free, which is
+      # plenty for a recovery-only AOSP tree. Build directly on / and skip the
+      # LVM indirection entirely; only delete the fat preinstalled toolchains
+      # to buy back a few more GB.
+      - name: Free disk space on the native filesystem
         run: |
           echo "=== before ==="
-          df -h /aosp
-          df -i /aosp
-          DEV=$(findmnt -no SOURCE /aosp)
-          echo "device backing /aosp: $DEV"
-          sudo umount /aosp
-          sudo mkfs.ext4 -F -m0 -i 4096 "$DEV"
-          sudo mount "$DEV" /aosp
-          sudo chown "$(id -u):$(id -g)" /aosp
-          echo "=== after mkfs ==="
-          df -h /aosp
-          df -i /aosp
-
-      # Prove the volume can actually ABSORB the bytes it advertises.
-      #
-      # df claims ~92 GB on /aosp, yet run #9 died with
-      #   OSError: [Errno 28] No space left on device:
-      #     '/aosp/source/.repo/project-objects/platform/tools/loganalysis.git'
-      # while /aosp had only grown to 1.3 GB and both bytes and inodes showed
-      # almost everything free. That only happens when the thin/LVM layer
-      # behind the mount cannot back the advertised size: maximize-build-space
-      # was run with overprovision-lvm, and the volume sits on a sparse pv.img
-      # file inside /, whose own free space is what really bounds the writes.
-      #
-      # So: really write a big file, drop it, and record the numbers. If this
-      # step cannot allocate the full size, the later steps say so explicitly
-      # instead of repo reporting a misattributed ENOSPC.
-      - name: Verify /aosp can really store the tree
-        run: |
-          set -x
-          df -h / /aosp
-          df -i /aosp
-          # 40 GB of real (non-sparse) writes
-          dd if=/dev/zero of=/aosp/.capacity-test bs=1M count=40960 status=none \
-            && echo "dd 40G OK" || echo "dd 40G FAILED (volume is smaller than it claims)"
-          sync
-          df -h /aosp
-          ls -l /aosp/.capacity-test
-          rm -f /aosp/.capacity-test
-          sync
-          df -h /aosp
+          df -h /
+          df -i /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          sudo apt-get clean || true
+          echo "=== after ==="
+          df -h /
+          df -i /
 
       - name: Report disk and memory
         run: |
           df -h /
           df -i /
           df -h /mnt || true
-          df -h /aosp
-          df -i /aosp
+          df -h /
+          df -i /
           free -h
           echo "cpus: $(nproc)"
-          mount | grep -E ' /aosp ' || true
+          mount | grep -E ' /build ' || true
 
       # run #6 finally explained the whole thing. maximize-build-space
       # fallocates a 96 GB /pv.img on /, so / itself only keeps ~30 GB free
-      # even though /aosp shows 95 GB. repo sync was writing its scratch and
+      # even though /build shows 95 GB. repo sync was writing its scratch and
       # git objects to /tmp and $HOME (both on /) and died with ENOSPC fetching
       # platform/frameworks/base.
       #
-      # From here on every heavy path points at /aosp via $GITHUB_ENV, so the
+      # From here on every heavy path points at /build via $GITHUB_ENV, so the
       # later steps inherit it without repeating themselves.
       - name: Point every heavy path at the big volume
         run: |
-          mkdir -p /aosp/{tmp,home,mono,source}
+          mkdir -p /build/{tmp,home,mono,source}
           {
-            echo "TMPDIR=/aosp/tmp"
-            echo "TMP=/aosp/tmp"
-            echo "TEMP=/aosp/tmp"
-            echo "HOME=/aosp/home"
+            echo "TMPDIR=/build/tmp"
+            echo "TMP=/build/tmp"
+            echo "TEMP=/build/tmp"
+            echo "HOME=/build/home"
           } >> "$GITHUB_ENV"
-          df -h / /aosp
+          df -h /
 
       # ------------------------------------------------------------ toolchain
       - name: Setup environment
@@ -162,13 +104,13 @@ jobs:
           git config --global user.email "ci@users.noreply.github.com"
           git config --global color.ui false
           echo "HOME=$HOME TMPDIR=$TMPDIR"
-          df -h / /aosp
+          df -h /
           repo --version
 
       # ------------------------------------------------------------ monorepo
       # The monorepo carries the manifest, the three consolidated AERA trees
       # and the device tree. ~420 MB, so move it off the small root fs onto
-      # the big /aosp volume right away.
+      # the big /build volume right away.
       - name: Checkout monorepo
         uses: actions/checkout@v4
         with:
@@ -180,7 +122,7 @@ jobs:
           cp -a "$GITHUB_WORKSPACE/mono-checkout/." "$MONO/"
           rm -rf "$GITHUB_WORKSPACE/mono-checkout"
           du -sh "$MONO"
-          df -h /aosp | tail -1
+          df -h / | tail -1
 
       # -------------------------------------------------------------- source
       # Partial clone keeps .repo small: blobs above 10 MB are fetched on
@@ -192,7 +134,7 @@ jobs:
       # run #6 and #7 both died instantly with
       #   error.GitError: Cannot checkout platform/prebuilts/rust:
       #                  Cannot initialize work tree for platform/prebuilts/rust
-      # and /aosp never grew past 1.3 GB, i.e. nothing was ever downloaded.
+      # and /build never grew past 1.3 GB, i.e. nothing was ever downloaded.
       # The manifest's own clone-depth already bounds the on-disk size.
       - name: repo init
         run: |
@@ -236,8 +178,8 @@ jobs:
           ok=0
           for i in 1 2 3; do
             echo "===== sync attempt $i (-j$SYNC_JOBS) ====="
-            df -h /aosp | tail -1
-            df -i /aosp | tail -1
+            df -h / | tail -1
+            df -i / | tail -1
             free -m | head -2
             repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
@@ -245,8 +187,8 @@ jobs:
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
             grep -m5 -E 'error:|fatal:|No space left' /tmp/sync.log \
               | sed 's/^/::error::sync: /' || true
-            echo "::error::sync bytes: $(df -h /aosp | tail -1)"
-            echo "::error::sync inodes: $(df -i /aosp | tail -1)"
+            echo "::error::sync bytes: $(df -h / | tail -1)"
+            echo "::error::sync inodes: $(df -i / | tail -1)"
 
             if grep -q 'Cannot initialize work tree' /tmp/sync.log && [ "$i" -eq 1 ]; then
               echo "work-tree init failure: retrying with partial clone"
@@ -261,7 +203,7 @@ jobs:
           done
           echo "===== sync summary ====="
           df -h / | tail -1
-          df -h /aosp | tail -1
+          df -h / | tail -1
           du -sh "$SRC" 2>/dev/null || true
           du -sh "$SRC/.repo" 2>/dev/null || true
           if [ "$ok" -ne 1 ]; then
@@ -291,7 +233,7 @@ jobs:
           test -f bootable/recovery/AERA_A16.sh                        && echo "recovery source OK"
           test -f vendor/recovery/AERA_A16.sh                          && echo "vendor/recovery OK"
           test -f external/lvgl/lvgl.h                                 && echo "lvgl OK"
-          df -h /aosp | tail -1
+          df -h / | tail -1
 
       # ---------------------------------------------------------------- build
       # TMPDIR is moved onto the big volume: soong/ninja scratch files default
@@ -301,13 +243,13 @@ jobs:
       - name: Build AERA recovery
         run: |
           cd "$SRC"
-          export TMPDIR=/aosp/tmp
+          export TMPDIR=/build/tmp
           mkdir -p "$TMPDIR"
           set -o pipefail
           (
             while true; do
               sleep 120
-              echo "[watchdog $(date -u +%T)] root=$(df -h / | awk 'NR==2{print $4}') aosp=$(df -h /aosp | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
+              echo "[watchdog $(date -u +%T)] root=$(df -h / | awk 'NR==2{print $4}') aosp=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
             done
           ) &
           WD=$!
