@@ -53,7 +53,11 @@ jobs:
           root-reserve-mb: 10240
           temp-reserve-mb: 4096
           swap-size-mb: 4096
-          overprovision-lvm: 'true'
+          # overprovision-lvm was on and is the prime suspect for the phantom
+          # ENOSPC in run #9: it lets the LVM thin pool promise more than it
+          # can back, so df reports ~92 GB while actual writes hit the wall at
+          # ~1.3 GB. Keep it off so the advertised size is real.
+          overprovision-lvm: 'false'
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -76,6 +80,7 @@ jobs:
       - name: Re-create /aosp with enough inodes for an AOSP tree
         run: |
           echo "=== before ==="
+          df -h /aosp
           df -i /aosp
           DEV=$(findmnt -no SOURCE /aosp)
           echo "device backing /aosp: $DEV"
@@ -83,10 +88,38 @@ jobs:
           sudo mkfs.ext4 -F -m0 -i 4096 "$DEV"
           sudo mount "$DEV" /aosp
           sudo chown "$(id -u):$(id -g)" /aosp
-          echo "=== after ==="
-          df -i /aosp
+          echo "=== after mkfs ==="
           df -h /aosp
-          touch /aosp/.writable && rm /aosp/.writable && echo "writable OK"
+          df -i /aosp
+
+      # Prove the volume can actually ABSORB the bytes it advertises.
+      #
+      # df claims ~92 GB on /aosp, yet run #9 died with
+      #   OSError: [Errno 28] No space left on device:
+      #     '/aosp/source/.repo/project-objects/platform/tools/loganalysis.git'
+      # while /aosp had only grown to 1.3 GB and both bytes and inodes showed
+      # almost everything free. That only happens when the thin/LVM layer
+      # behind the mount cannot back the advertised size: maximize-build-space
+      # was run with overprovision-lvm, and the volume sits on a sparse pv.img
+      # file inside /, whose own free space is what really bounds the writes.
+      #
+      # So: really write a big file, drop it, and record the numbers. If this
+      # step cannot allocate the full size, the later steps say so explicitly
+      # instead of repo reporting a misattributed ENOSPC.
+      - name: Verify /aosp can really store the tree
+        run: |
+          set -x
+          df -h / /aosp
+          df -i /aosp
+          # 40 GB of real (non-sparse) writes
+          dd if=/dev/zero of=/aosp/.capacity-test bs=1M count=40960 status=none \
+            && echo "dd 40G OK" || echo "dd 40G FAILED (volume is smaller than it claims)"
+          sync
+          df -h /aosp
+          ls -l /aosp/.capacity-test
+          rm -f /aosp/.capacity-test
+          sync
+          df -h /aosp
 
       - name: Report disk and memory
         run: |
