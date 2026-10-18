@@ -123,12 +123,22 @@ jobs:
             echo "===== sync attempt $i (-j$SYNC_JOBS) ====="
             df -h /aosp | tail -1
             free -m | head -2
-            repo sync -c --partial-clone -j"$SYNC_JOBS" 2>&1 | tail -120
+            # No --partial-clone here: partial clone is already configured by
+            # `repo init --partial-clone`, and repeating it on sync made repo
+            # exit 2 immediately (argparse reject) in run #2.
+            repo sync -c -j"$SYNC_JOBS" > /tmp/sync.log 2>&1
             rc=$?
             echo "attempt $i -> exit $rc"
+            # Surface the tail of the log both in stdout and as a workflow
+            # error annotation, so the reason is recoverable without the
+            # private job log.
+            tail -40 /tmp/sync.log
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
+            grep -m3 -E 'error|fatal|Error' /tmp/sync.log \
+              | sed 's/^/::error::sync: /' || true
             echo "retrying with a gentler, forced sync"
-            repo sync -c --force-sync --partial-clone -j2 2>&1 | tail -60 || true
+            repo sync -c --force-sync -j2 > /tmp/sync2.log 2>&1 || true
+            tail -20 /tmp/sync2.log
             sleep 20
           done
           echo "===== sync summary ====="
