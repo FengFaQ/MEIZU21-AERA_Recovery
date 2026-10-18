@@ -34,14 +34,22 @@ jobs:
       # Disk is the #1 killer here: an AOSP 16 tree plus its .repo object
       # store overflows the stock 14 GB runner disk and the runner is killed
       # ("The hosted runner lost communication with the server"), which is
-      # exactly how run #1 died after 62 minutes inside repo sync.
-      # maximize-build-space frees the runner image (dotnet/android/haskell)
-      # and remounts the reclaimed space on /aosp.
+      # exactly how run #1 died inside repo sync (62 min) and run #3 died
+      # inside the compile step (48 min).
+      #
+      # README of the action: "You will not have more space on the root volume
+      # available than specified in root-reserve-mb". With 4096 the whole / fs
+      # is 4 GB, but AOSP keeps writing to / (soong intermediates under /tmp,
+      # ninja temp files, /home/runner, /root/.cache) and blew it up mid-build.
+      # Give / a real 30 GB, keep 8 GB on /mnt, and overprovision so a slightly
+      # too small reservation cannot kill the runner.
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 4096
-          swap-size-mb: 2048
+          root-reserve-mb: 30720
+          temp-reserve-mb: 8192
+          swap-size-mb: 4096
+          overprovision-lvm: 'true'
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -52,6 +60,7 @@ jobs:
       - name: Report disk and memory
         run: |
           df -h /
+          df -h /mnt || true
           df -h /aosp
           free -h
           echo "cpus: $(nproc)"
@@ -171,16 +180,31 @@ jobs:
           df -h /aosp | tail -1
 
       # ---------------------------------------------------------------- build
+      # TMPDIR is moved onto the big volume: soong/ninja scratch files default
+      # to /tmp, which lives on the small root fs and was a suspect in the
+      # "runner lost communication" kills. A background watchdog reports disk
+      # pressure so a future failure is explainable instead of silent.
       - name: Build AERA recovery
         run: |
           cd "$SRC"
+          export TMPDIR=/aosp/tmp
+          mkdir -p "$TMPDIR"
           set -o pipefail
+          (
+            while true; do
+              sleep 120
+              echo "[watchdog $(date -u +%T)] root=$(df -h / | awk 'NR==2{print $4}') aosp=$(df -h /aosp | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
+            done
+          ) &
+          WD=$!
           source build/envsetup.sh
           lunch "$LUNCH_TARGET"
           get_build_var TARGET_PRODUCT || true
           get_build_var TARGET_BUILD_VARIANT || true
           mka adbd recoveryimage 2>&1 | tail -250
-          exit ${PIPESTATUS[0]}
+          rc=${PIPESTATUS[0]}
+          kill $WD 2>/dev/null || true
+          exit $rc
 
       # ------------------------------------------------------------ artefacts
       - name: Collect artefacts
