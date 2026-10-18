@@ -144,11 +144,13 @@ jobs:
 
       # bootable/recovery, external/lvgl and vendor/recovery ship inside the
       # monorepo (see the overlay step), so repo must not fetch them.
-      # local-prune.xml additionally drops the AOSP projects a recovery build
-      # never touches (CTS/VTS/tradefed, dev tooling, foreign-arch prebuilts),
-      # because run #12 filled the whole 145 GB runner disk and GitHub could
-      # not even write its own diagnostic log.
-      - name: Local manifests - monorepo overlay and AOSP pruning
+      #
+      # Pruning is done with -g/-x groups on the sync, NOT with a
+      # remove-project list: run #13 proved that naming a project that an
+      # earlier manifest layer already removed is a hard error
+      #   "remove-project element specifies non-existent project: platform/cts"
+      # Group selection is declarative and cannot reference a missing project.
+      - name: Local manifest - skip AERA repos shipped in the monorepo
         run: |
           cd "$SRC"
           mkdir -p .repo/local_manifests
@@ -160,24 +162,22 @@ jobs:
             <remove-project name="android_vendor_recovery" />
           </manifest>
           XML
-          cp -f "$MONO/local-prune.xml" .repo/local_manifests/01-prune.xml
           ls -la .repo/local_manifests
-          echo "--- projects after pruning (dry run) ---"
+          echo "--- projects visible to repo ---"
           repo list 2>/dev/null | wc -l
           # keep copies outside .repo: a repo init fallback re-creates .repo
           mkdir -p /tmp/localmanifests
           cp -f .repo/local_manifests/*.xml /tmp/localmanifests/
 
-      # The step must FAIL when repo sync fails: in run #1 the retry loop
-      # swallowed the exit status and the tree was silently incomplete.
+      # Group exclusion instead of a remove-project list.
       #
-      # Retry ladder, because two DIFFERENT failures showed up here:
-      #   "No space left on device"            -> needs partial clone
-      #   "Cannot initialize work tree for
-      #    platform/prebuilts/rust"            -> partial clone is the culprit
-      # So attempt 1 is plain (manifest already pins clone-depth="1" on the
-      # big prebuilt projects), and if that dies for a non-space reason we
-      # re-init with partial clone and try again. Both paths are logged.
+      # Run #13 showed why an explicit prune manifest is fragile: naming a
+      # project that an earlier manifest layer already removed is a hard error
+      #   remove-project element specifies non-existent project: platform/cts
+      # Group filters are declarative, so excluding a group whose members
+      # happen to be gone already is harmless. Everything the build needs is
+      # in the default/pdk families, so exclude the test, desktop and
+      # non-Linux groups plus the per-device ones.
       - name: repo sync
         run: |
           cd "$SRC"
@@ -188,7 +188,13 @@ jobs:
             df -h / | tail -1
             df -i / | tail -1
             free -m | head -2
-            repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
+            repo sync -c -j"$SYNC_JOBS" \
+              -x cts,tradefed,vts,developers,desktop,pdk-desktop,android-desktop \
+              -x darwin,platform-darwin,motodev,adt-infra \
+              -x device,pixel,yukawa,dragonboard,hikey,broadcom_pdk,broadcom_wlan \
+              -x qcom_msm8x26,qcom_wlan,invensense,drm_hwcomposer,trusty \
+              -x notdefault,sysui-studio \
+              2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
