@@ -16,13 +16,13 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # This monorepo doubles as the repo manifest: default.xml at the repo root.
   MANIFEST_URL: https://github.com/FengFaQ/MEIZU21-AERA_Recovery
   MANIFEST_BRANCH: main
   LUNCH_TARGET: twrp_m2461-bp2a-eng
   DEVICE_DIR: device/meizu/m2461
-  CCACHE_DIR: /home/runner/.ccache
-  CCACHE_MAXSIZE: 5G
+  SRC: /aosp/source
+  MONO: /aosp/mono
+  SYNC_JOBS: '4'
 
 jobs:
   build:
@@ -30,67 +30,77 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
-      # ------------------------------------------------------------- space
+      # ---------------------------------------------------------------- space
+      # Disk is the #1 killer here: an AOSP 16 tree plus its .repo object
+      # store overflows the stock 14 GB runner disk and the runner is killed
+      # ("The hosted runner lost communication with the server"), which is
+      # exactly how run #1 died after 62 minutes inside repo sync.
+      # maximize-build-space frees the runner image (dotnet/android/haskell)
+      # and remounts the reclaimed space on /aosp.
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 8192
-          swap-size-mb: 3072
+          root-reserve-mb: 4096
+          swap-size-mb: 2048
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+          build-mount-path: /aosp
+
+      - name: Report disk and memory
+        run: |
+          df -h /
+          df -h /aosp
+          free -h
+          echo "cpus: $(nproc)"
+          mount | grep -E ' /aosp ' || true
 
       # ------------------------------------------------------------ toolchain
       - name: Setup environment
         run: |
           sudo apt-get update
           sudo apt-get install -y git python3 unzip xz-utils lz4 rsync
-          # current repo bootstrap (works with the AERA manifest chain)
           curl -sSL -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
           chmod a+x /usr/local/bin/repo
           git config --global user.name "AERA CI"
           git config --global user.email "ci@users.noreply.github.com"
           git config --global color.ui false
-          git config --global core.fsmonitor false || true
           repo --version
 
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: aera-16.0-m2461
-          max-size: 5G
-
-      - name: Setup swap
-        run: |
-          sudo fallocate -l 8G /swapfile || true
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile || true
-          sudo swapon /swapfile || true
-          free -h
-
-      # ------------------------------------------------------------- source
-      - name: Checkout monorepo (manifest + AERA sources + device tree)
+      # ------------------------------------------------------------ monorepo
+      # The monorepo carries the manifest, the three consolidated AERA trees
+      # and the device tree. ~420 MB, so move it off the small root fs onto
+      # the big /aosp volume right away.
+      - name: Checkout monorepo
         uses: actions/checkout@v4
         with:
-          path: mono
+          path: mono-checkout
 
-      - name: Report disk
-        run: df -h / && free -h
-
-      - name: repo init (this repo is the manifest)
+      - name: Relocate monorepo onto the big volume
         run: |
-          mkdir -p aosp
-          cd aosp
-          repo init --no-clone-bundle -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+          mkdir -p "$MONO"
+          cp -a "$GITHUB_WORKSPACE/mono-checkout/." "$MONO/"
+          rm -rf "$GITHUB_WORKSPACE/mono-checkout"
+          du -sh "$MONO"
+          df -h /aosp | tail -1
 
-      # The consolidated AERA sources (bootable/recovery, external/lvgl,
-      # vendor/recovery) ship inside this monorepo; skip pulling them from the
-      # AERA-Recovery org and overlay them below.
+      # -------------------------------------------------------------- source
+      # Partial clone keeps .repo small: blobs above 10 MB are fetched on
+      # demand instead of being packed into the object store up front.
+      - name: repo init
+        run: |
+          mkdir -p "$SRC"
+          cd "$SRC"
+          repo init --no-clone-bundle --partial-clone --clone-filter=blob:limit=10M \
+            -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+
+      # bootable/recovery, external/lvgl and vendor/recovery ship inside the
+      # monorepo (see the overlay step), so repo must not fetch them.
       - name: Local manifest - skip AERA repos shipped in the monorepo
         run: |
-          cd aosp
+          cd "$SRC"
           mkdir -p .repo/local_manifests
           cat > .repo/local_manifests/00-meizu21.xml <<'XML'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -102,66 +112,72 @@ jobs:
           XML
           cat .repo/local_manifests/00-meizu21.xml
 
+      # The step must FAIL when repo sync fails: in run #1 the retry loop
+      # swallowed the exit status and the tree was silently incomplete.
       - name: repo sync
         run: |
-          cd aosp
-          # retry a few times: android.googlesource.com occasionally 429s
+          cd "$SRC"
+          set -o pipefail
+          ok=0
           for i in 1 2 3; do
-            echo "attempt $i ..."
-            # the manifest pins aosp projects to refs/tags/android-16.0.0_r1,
-            # so tags must be fetched.
-            repo sync -c --force-sync -j"$(nproc --all)" && break
-            echo "sync attempt $i failed; retrying in 30s"
-            sleep 30
+            echo "===== sync attempt $i (-j$SYNC_JOBS) ====="
+            df -h /aosp | tail -1
+            free -m | head -2
+            repo sync -c --partial-clone -j"$SYNC_JOBS" 2>&1 | tail -120
+            rc=$?
+            echo "attempt $i -> exit $rc"
+            if [ "$rc" -eq 0 ]; then ok=1; break; fi
+            echo "retrying with a gentler, forced sync"
+            repo sync -c --force-sync --partial-clone -j2 2>&1 | tail -60 || true
+            sleep 20
           done
-          df -h / | tail -1
+          echo "===== sync summary ====="
+          df -h /aosp | tail -1
+          du -sh "$SRC" 2>/dev/null || true
+          du -sh "$SRC/.repo" 2>/dev/null || true
+          if [ "$ok" -ne 1 ]; then echo "::error::repo sync failed after 3 attempts"; exit 1; fi
+          test -f build/envsetup.sh || { echo "::error::incomplete tree: build/envsetup.sh missing"; exit 1; }
+          test -d bionic               || { echo "::error::incomplete tree: bionic missing"; exit 1; }
+          test -d build/soong          || { echo "::error::incomplete tree: build/soong missing"; exit 1; }
+          echo "tree looks usable"
 
-      - name: Overlay consolidated AERA sources + install device tree
+      # --------------------------------------------------------------- device
+      - name: Overlay consolidated AERA sources and install device tree
         run: |
-          cd aosp
+          cd "$SRC"
           rm -rf bootable/recovery external/lvgl vendor/recovery "$DEVICE_DIR"
-          cp -a ../mono/android_bootable_recovery bootable/recovery
-          cp -a ../mono/android_external_lvgl external/lvgl
-          cp -a ../mono/android_vendor_recovery vendor/recovery
+          cp -a "$MONO/android_bootable_recovery" bootable/recovery
+          cp -a "$MONO/android_external_lvgl" external/lvgl
+          cp -a "$MONO/android_vendor_recovery" vendor/recovery
           mkdir -p "$(dirname "$DEVICE_DIR")"
-          cp -a ../mono/device/meizu/m2461 "$DEVICE_DIR"
-          echo "== tree present =="
-          test -s "$DEVICE_DIR/prebuilt/kernel" && echo "kernel OK"
-          test -d "$DEVICE_DIR/recovery/root" && echo "recovery/root OK"
-          test -f bootable/recovery/AERA_A16.sh && echo "recovery source OK"
-          test -f vendor/recovery/AERA_A16.sh && echo "vendor/recovery OK" || ls vendor/recovery | head
-          test -f external/lvgl/lvgl.h && echo "lvgl OK"
-          ls "$DEVICE_DIR" | head -20
+          cp -a "$MONO/$DEVICE_DIR" "$DEVICE_DIR"
+          echo "===== sanity ====="
+          test -s "$DEVICE_DIR/prebuilt/kernel"                        && echo "kernel OK"
+          test -f "$DEVICE_DIR/recovery/root/system/etc/recovery.fstab" && echo "fstab OK"
+          test -d "$DEVICE_DIR/recovery/root/vendor/lib64"             && echo "vendor blobs OK"
+          test -f bootable/recovery/AERA_A16.sh                        && echo "recovery source OK"
+          test -f vendor/recovery/AERA_A16.sh                          && echo "vendor/recovery OK"
+          test -f external/lvgl/lvgl.h                                 && echo "lvgl OK"
+          df -h /aosp | tail -1
 
-      # -------------------------------------------------------------- build
+      # ---------------------------------------------------------------- build
       - name: Build AERA recovery
         run: |
-          cd aosp
+          cd "$SRC"
           set -o pipefail
           source build/envsetup.sh
           lunch "$LUNCH_TARGET"
-          # log the chosen config for debugging
-          get_build_var TARGET_PRODUCT 2>/dev/null || true
-          get_build_var TARGET_BUILD_VARIANT 2>/dev/null || true
-          mka adbd recoveryimage 2>&1 | tee /tmp/build.log
-          rc=${PIPESTATUS[0]}
-          exit $rc
+          get_build_var TARGET_PRODUCT || true
+          get_build_var TARGET_BUILD_VARIANT || true
+          mka adbd recoveryimage 2>&1 | tail -250
+          exit ${PIPESTATUS[0]}
 
-      - name: Save build log on failure
-        if: failure()
-        run: |
-          mkdir -p boot-log
-          [ -f /tmp/build.log ] && cp /tmp/build.log boot-log/build.log || true
-          [ -f aosp/out/verbose.log.gz ] && cp aosp/out/verbose.log.gz boot-log/ || true
-          [ -f aosp/out/error.log ] && cp aosp/out/error.log boot-log/ || true
-          ls -la boot-log
-
-      # ---------------------------------------------------------- artefacts
+      # ------------------------------------------------------------ artefacts
       - name: Collect artefacts
         if: always()
         run: |
           mkdir -p artefacts
-          OUT=aosp/out/target/product/m2461
+          OUT="$SRC/out/target/product/m2461"
           cp -v "$OUT/recovery.img" artefacts/ 2>/dev/null || true
           cp -v "$OUT/adbd" artefacts/ 2>/dev/null || true
           ls -la artefacts || true
@@ -169,14 +185,6 @@ jobs:
             sha256sum artefacts/recovery.img > artefacts/recovery.img.sha256
             du -h artefacts/recovery.img
           fi
-
-      - name: Upload build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ github.run_number }}
-          path: boot-log/
-          retention-days: 14
 
       - name: Upload recovery image
         if: success()
@@ -199,7 +207,7 @@ jobs:
           body: |
             AERA Recovery R1.0 (aera-16.0) for Meizu 21 (m2461)
 
-            - manifest: this repo (main), AERA 16.0 chain (default.xml -> twrp-default.xml -> aera.xml)
+            - manifest: this repo (main), chain default.xml -> twrp-default.xml -> aera.xml
             - device tree commit: `${{ github.sha }}`
             - kernel: stock M2461 `Image` (6.1.25-android14-11-maybe-dirty)
 
