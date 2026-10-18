@@ -298,17 +298,20 @@ jobs:
           test -f external/lvgl/lvgl.h                                 && echo "lvgl OK"
           df -h / | tail -1
 
-          # envsetup.sh and the build scripts shell out to git in these
-          # directories; without a .git they emit
-          #   fatal: not a git repository (or any of the parent directories)
-          # and envsetup falls into "dependencies-only mode". A throwaway repo
-          # with no commits satisfies git rev-parse lookups.
+          # envsetup.sh and the build scripts shell out to git here. Without a
+          # .git they print "fatal: not a git repository"; with an EMPTY .git
+          # they print "fatal: your current branch 'master' does not have any
+          # commits yet" (run #19) and envsetup still lands in
+          # "dependencies-only mode on a non-existing device tree". A single
+          # empty commit makes every rev-parse/describe lookup succeed.
           for d in bootable/recovery external/lvgl vendor/recovery "$DEVICE_DIR"; do
             if [ -d "$d" ] && [ ! -e "$d/.git" ]; then
               git -C "$d" init -q 2>/dev/null || true
+              git -C "$d" -c user.name=ci -c user.email=ci@local \
+                commit -q --allow-empty -m overlay 2>/dev/null || true
             fi
           done
-          git -C bootable/recovery rev-parse --git-dir 2>&1 | head -1
+          git -C bootable/recovery rev-parse --short HEAD 2>&1 | head -1
 
       # ---------------------------------------------------------------- build
       # Run #17 reached the compile for the first time and was killed with
@@ -333,14 +336,15 @@ jobs:
           echo "=== after reclaim ==="
           df -h /
           du -sh .repo 2>/dev/null || true
-          # extra swap for the build (GitHub's /mnt swap was removed by the
-          # maximize step earlier in some runs; create our own)
-          if ! swapon --show | grep -q .; then
-            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-            sudo swapon /swapfile
-          fi
+          # Swap: soong_build alone (a large Go binary) peaks well past the
+          # memory left after the tree is checked out. Run #19 was killed at
+          # 99% of the soong bootstrap with mem=936MB.
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
           free -h
 
       - name: Build AERA recovery
@@ -357,15 +361,19 @@ jobs:
           lunch "$LUNCH_TARGET"
           get_build_var TARGET_PRODUCT || true
           get_build_var TARGET_BUILD_VARIANT || true
-          export SOONG_UI_JOB_LIMIT=4
+          # Job count. Run #19 got to 99% of the soong bootstrap and was killed
+          # with only 936 MB of RAM left, so -j4 on a 4 vCPU / 16 GB runner is
+          # still too wide. Two concurrent compile jobs plus a 16 GB swap file
+          # is the shape that fits this machine.
+          export SOONG_UI_JOB_LIMIT=2
           set +e
-          mka -j4 adbd recoveryimage > /build/build.log 2>&1 &
+          mka -j2 adbd recoveryimage > /build/build.log 2>&1 &
           BUILD_PID=$!
           (
             while kill -0 "$BUILD_PID" 2>/dev/null; do
-              sleep 120
+              sleep 60
               echo "[watchdog $(date -u +%T)] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}') swap=$(free -m | awk '/Swap:/{print $4"MB free"}') out=$(du -sh "$SRC/out" 2>/dev/null | cut -f1)"
-              tail -3 /build/build.log
+              tail -2 /build/build.log
             done
           ) &
           WD=$!
