@@ -123,11 +123,20 @@ jobs:
       # -------------------------------------------------------------- source
       # Partial clone keeps .repo small: blobs above 10 MB are fetched on
       # demand instead of being packed into the object store up front.
+      # No --partial-clone: the AOSP 16 manifest in this tree already pins
+      # clone-depth="1" on ~100 projects (prebuilts/*, kernel/prebuilts/*,
+      # packages/modules/ArtPrebuilt, ...). Combining a blob filter with
+      # shallow clones makes repo fail while materialising the work tree -
+      # run #6 and #7 both died instantly with
+      #   error.GitError: Cannot checkout platform/prebuilts/rust:
+      #                  Cannot initialize work tree for platform/prebuilts/rust
+      # and /aosp never grew past 1.3 GB, i.e. nothing was ever downloaded.
+      # The manifest's own clone-depth already bounds the on-disk size.
       - name: repo init
         run: |
           mkdir -p "$SRC"
           cd "$SRC"
-          repo init --no-clone-bundle --partial-clone --clone-filter=blob:limit=10M \
+          repo init --no-clone-bundle \
             -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
 
       # bootable/recovery, external/lvgl and vendor/recovery ship inside the
@@ -145,9 +154,19 @@ jobs:
           </manifest>
           XML
           cat .repo/local_manifests/00-meizu21.xml
+          # keep a copy outside .repo: a repo init fallback re-creates .repo
+          cp -f .repo/local_manifests/00-meizu21.xml /tmp/local-manifest.xml
 
       # The step must FAIL when repo sync fails: in run #1 the retry loop
       # swallowed the exit status and the tree was silently incomplete.
+      #
+      # Retry ladder, because two DIFFERENT failures showed up here:
+      #   "No space left on device"            -> needs partial clone
+      #   "Cannot initialize work tree for
+      #    platform/prebuilts/rust"            -> partial clone is the culprit
+      # So attempt 1 is plain (manifest already pins clone-depth="1" on the
+      # big prebuilt projects), and if that dies for a non-space reason we
+      # re-init with partial clone and try again. Both paths are logged.
       - name: repo sync
         run: |
           cd "$SRC"
@@ -157,24 +176,22 @@ jobs:
             echo "===== sync attempt $i (-j$SYNC_JOBS) ====="
             df -h /aosp | tail -1
             free -m | head -2
-            # No --partial-clone here: partial clone is already configured by
-            # `repo init --partial-clone`, and repeating it on sync made repo
-            # exit 2 immediately (argparse reject) in run #2.
-            # Run #4 proved the previous form was undiagnosable: output went to
-            # /tmp/sync.log only, so the job log showed 31 minutes of nothing
-            # and then exit 1. stream it (tee) so progress and the failing
-            # project are visible in real time.
             repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
-            # Emit the real error lines as annotations (visible without the
-            # authenticated job log) plus a disk/space snapshot, since
-            # "No space left on device" is the failure we keep chasing.
             grep -m5 -E 'error:|fatal:|No space left' /tmp/sync.log \
               | sed 's/^/::error::sync: /' || true
             echo "::error::sync disk: $(df -h /aosp | tail -1)"
-            echo "retrying with a gentler, forced sync"
+
+            if grep -q 'Cannot initialize work tree' /tmp/sync.log && [ "$i" -eq 1 ]; then
+              echo "work-tree init failure: retrying with partial clone"
+              repo init --no-clone-bundle --partial-clone \
+                --clone-filter=blob:limit=10M -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+              cp -f /tmp/local-manifest.xml .repo/local_manifests/00-meizu21.xml 2>/dev/null || true
+              continue
+            fi
+            echo "retrying with a forced sync"
             repo sync -c --force-sync -j2 2>&1 | tee /tmp/sync2.log || true
             sleep 20
           done
