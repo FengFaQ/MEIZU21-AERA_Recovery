@@ -1,0 +1,70 @@
+diff --git a/Source/WebCore/bindings/js/JSHTMLMediaElementCustom.cpp b/Source/WebCore/bindings/js/JSHTMLMediaElementCustom.cpp
+--- a/Source/WebCore/bindings/js/JSHTMLMediaElementCustom.cpp
++++ b/Source/WebCore/bindings/js/JSHTMLMediaElementCustom.cpp
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "config.h"
++
++#if ENABLE(VIDEO)
++
+ #include "JSHTMLMediaElement.h"
+@@ -40,3 +43,5 @@
+ DEFINE_VISIT_ADDITIONAL_CHILDREN(JSHTMLMediaElement);
+ 
+ } // namespace WebCore
++
++#endif // ENABLE(VIDEO)
+diff --git a/Source/WebCore/loader/DocumentLoader.cpp b/Source/WebCore/loader/DocumentLoader.cpp
+--- a/Source/WebCore/loader/DocumentLoader.cpp
++++ b/Source/WebCore/loader/DocumentLoader.cpp
+@@ -53,6 +53,7 @@
+ #include "DocumentWriter.h"
+ #include "ElementChildIteratorInlines.h"
+ #include "Event.h"
++#include "EventLoop.h"
+ #include "EventNames.h"
+diff --git a/Source/WebCore/platform/glib/UserAgentGLib.cpp b/Source/WebCore/platform/glib/UserAgentGLib.cpp
+--- a/Source/WebCore/platform/glib/UserAgentGLib.cpp
++++ b/Source/WebCore/platform/glib/UserAgentGLib.cpp
+@@ -88,7 +88,7 @@
+     else {
+         uaString.append(platformForUAString(), "; "_s);
+ #if defined(USER_AGENT_BRANDING)
+-        uaString.append(USER_AGENT_BRANDING "; "_s);
++        uaString.append(STRINGIZE_VALUE_OF(USER_AGENT_BRANDING) "; "_s);
+ #endif
+diff --git a/Source/WebKit/PlatformWPE.cmake b/Source/WebKit/PlatformWPE.cmake
+--- a/Source/WebKit/PlatformWPE.cmake
++++ b/Source/WebKit/PlatformWPE.cmake
+@@ -478,6 +478,9 @@
+ if (ANDROID)
+     list(APPEND WebKit_PRIVATE_LIBRARIES intl)
++elseif (CMAKE_C_COMPILER_TARGET MATCHES "musl")
++    find_library(AERA_INTL_LIBRARY NAMES intl REQUIRED)
++    list(APPEND WebKit_PRIVATE_LIBRARIES ${AERA_INTL_LIBRARY})
+ endif ()
+@@ -513,7 +516,7 @@
+-else ()
++elseif (USE_GSTREAMER)
+     list(APPEND WebKit_SYSTEM_INCLUDE_DIRECTORIES
+diff --git a/Tools/MiniBrowser/wpe/CMakeLists.txt b/Tools/MiniBrowser/wpe/CMakeLists.txt
+--- a/Tools/MiniBrowser/wpe/CMakeLists.txt
++++ b/Tools/MiniBrowser/wpe/CMakeLists.txt
+@@ -13,6 +13,7 @@
+     ${JavaScriptCore_LIBRARY_NAME}
+     WebKit::WebKit
++    GLib::Gio
+ )
+@@ -36,7 +37,7 @@
+-if (NOT USE_GSTREAMER_FULL)
++if (USE_GSTREAMER AND NOT USE_GSTREAMER_FULL)
+@@ -49,6 +50,13 @@
+ WEBKIT_EXECUTABLE(MiniBrowser)
+ 
++target_link_libraries(MiniBrowser PRIVATE WebKit GLib::Gio)
++target_include_directories(MiniBrowser PRIVATE
++    ${WTF_FRAMEWORK_HEADERS_DIR}
++    ${CMAKE_BINARY_DIR}/DerivedSources/WebKit
++)
++

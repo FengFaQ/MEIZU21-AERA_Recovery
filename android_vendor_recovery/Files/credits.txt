@@ -1,0 +1,11 @@
+AERA Recovery Project credits
+-----------------------------
+
+* Android Open Source Project
+* TeamWin Recovery Project
+* OrangeFox Recovery Project and its contributors
+* LineageOS
+* libretro, NetSurf, LVGL, and other upstream projects used by AERA
+* AERA maintainers, contributors, testers, and users
+
+Original copyright and license notices are retained in inherited source files.

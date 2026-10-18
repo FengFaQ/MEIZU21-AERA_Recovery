@@ -1,0 +1,259 @@
+import /init.recovery.logd.rc
+import /init.recovery.ldconfig.rc
+import /init.recovery.mksh.rc
+import /init.recovery.usb.rc
+import /init.recovery.service.rc
+import /init.recovery.${ro.hardware}.rc
+
+on early-init
+    # Set the security context of /postinstall if present.
+    restorecon /postinstall
+
+    # ueventd wants to write to /acct
+    mount cgroup none /acct cpuacct
+    mkdir /acct/uid
+    # Copy prebuilt ld.config.txt into linkerconfig directory
+    copy /system/etc/ld.config.txt /linkerconfig/ld.config.txt
+    chmod 444 /linkerconfig/ld.config.txt
+    mkdir /system/bin/bootstrap
+    symlink /system/bin/linker64 /system/bin/bootstrap/linker64
+    symlink /system/bin/linker /system/bin/bootstrap/linker
+    symlink /system/bin/linker /system/bin/bootstrap/linker_asan
+    symlink /system/bin/linker64 /system/bin/bootstrap/linker_asan64
+    symlink /system/bin/linker64 /system/bin/bootstrap/linker_hwasan64
+
+    start ueventd
+
+    setprop sys.usb.configfs 0
+
+on init
+    export PATH /sbin:/system/bin
+    export LD_LIBRARY_PATH /system/lib64:/vendor/lib64:/vendor/lib64/egl:/vendor/lib64/hw
+
+    export ANDROID_ROOT /system
+    export ANDROID_DATA /data
+    export EXTERNAL_STORAGE /sdcard
+
+    symlink /proc/self/fd/0 /dev/stdin
+    symlink /proc/self/fd/1 /dev/stdout
+    symlink /proc/self/fd/2 /dev/stderr
+
+    symlink /system/bin /bin
+    symlink /system/etc /etc
+    rmdir /sbin
+    symlink /system/bin /sbin
+
+    mount cgroup none /acct cpuacct
+    mkdir /acct/uid
+
+    mkdir /sdcard
+    mkdir /system
+    mkdir /data
+    symlink /data/cache /cache
+    mkdir /sideload
+    mkdir /mnt/system
+    mount tmpfs tmpfs /tmp
+
+    chown root shell /tmp
+    chmod 0775 /tmp
+    mkdir /tmp/misc
+    mkdir /tmp/misc/keystore/
+
+    write /proc/sys/kernel/panic_on_oops 1
+    write /proc/sys/vm/max_map_count 1000000
+
+    mkdir /dev/binderfs
+    mount binder binder /dev/binderfs stats=global
+    chmod 0755 /dev/binderfs
+    chmod 0666 /dev/binderfs/hwbinder
+    chmod 0666 /dev/binderfs/binder
+    chmod 0666 /dev/binderfs/vndbinder
+    symlink /dev/binderfs/binder /dev/binder
+    symlink /dev/binderfs/hwbinder /dev/hwbinder
+    symlink /dev/binderfs/vndbinder /dev/vndbinder
+
+    # Create location for fs_mgr to store abbreviated output from filesystem
+    # checker programs.
+    mkdir /dev/fscklogs 0770 root system
+
+on boot
+    ifup lo
+    hostname localhost
+    domainname localdomain
+
+    class_start default
+    class_start hal
+
+on firmware_mounts_complete
+    rm /dev/.booting
+
+# Mount filesystems and start core system services.
+on late-init
+    trigger early-fs
+    trigger fs
+    trigger post-fs
+    trigger post-fs-data
+
+    # Remove a file to wake up anything waiting for firmware
+    trigger firmware_mounts_complete
+
+    trigger early-boot
+    trigger boot
+
+on post-fs-data
+    # Set fscklog permission
+    chown root system /dev/fscklogs/log
+    chmod 0770 /dev/fscklogs/log
+
+service ueventd /system/bin/ueventd
+    critical
+    seclabel u:r:ueventd:s0
+    user root
+
+service console /system/bin/sh
+    class core
+    console
+    disabled
+    user shell
+    group shell log readproc
+    seclabel u:r:shell:s0
+    setenv HOSTNAME console
+
+on init && property:ro.debuggable=1
+    start console
+
+service charger /system/bin/charger
+    critical
+    seclabel u:r:charger:s0
+    user root
+
+service recovery /system/bin/recovery
+    socket recovery stream 422 system system
+    seclabel u:r:recovery:s0
+    user root
+
+service adbd /system/bin/adbd --root_seclabel=u:r:su:s0 --device_banner=recovery
+    disabled
+    socket adbd stream 660 system system
+    seclabel u:r:adbd:s0
+    user root
+
+# Always start adbd on userdebug and eng builds
+on property:ro.debuggable=1
+    #write /sys/class/android_usb/android0/enable 1
+    #start adbd
+    setprop service.adb.root 1
+
+# Always start adbd on userdebug and eng builds
+on fs && property:ro.debuggable=1
+    setprop sys.usb.config adb
+
+# Always start adbd on userdebug and eng builds
+on property:ro.debuggable=1
+    #write /sys/class/android_usb/android0/enable 1
+    #start adbd
+    setprop service.adb.root 1
+
+# Always start adbd on userdebug and eng builds
+on fs && property:ro.debuggable=1
+    setprop sys.usb.config adb
+
+service fastbootd /system/bin/fastbootd
+    disabled
+    group system
+    seclabel u:r:fastbootd:s0
+    user root
+
+# Restart adbd so it can run as root
+on property:service.adb.root=1
+    restart adbd
+
+on fs && property:sys.usb.configfs=1
+    mount configfs none /config
+    mkdir /config/usb_gadget/g1 0770 shell shell
+    write /config/usb_gadget/g1/idVendor 0x${ro.recovery.usb.vid}
+    mkdir /config/usb_gadget/g1/strings/0x409 0770
+    write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+    write /config/usb_gadget/g1/strings/0x409/manufacturer ${ro.product.manufacturer}
+    write /config/usb_gadget/g1/strings/0x409/product ${ro.product.model}
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    mkdir /config/usb_gadget/g1/functions/ffs.fastboot
+    mkdir /config/usb_gadget/g1/configs/b.1 0777 shell shell
+    # Set current limit to 900mA (b/277022505)
+    write /config/usb_gadget/g1/configs/b.1/MaxPower 0x384
+    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
+
+on fs && property:sys.usb.configfs=0
+    write /sys/class/android_usb/android0/f_ffs/aliases adb,fastboot
+    write /sys/class/android_usb/android0/idVendor ${ro.recovery.usb.vid}
+    write /sys/class/android_usb/android0/iManufacturer ${ro.product.manufacturer}
+    write /sys/class/android_usb/android0/iProduct ${ro.product.model}
+    write /sys/class/android_usb/android0/iSerial ${ro.serialno}
+
+on fs
+    mount pstore pstore /sys/fs/pstore
+    mkdir /dev/usb-ffs 0770 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=2000
+    mkdir /dev/usb-ffs/fastboot 0770 system system
+    mount functionfs fastboot /dev/usb-ffs/fastboot rmode=0770,fmode=0660,uid=1000,gid=1000
+
+on property:sys.usb.config=adb
+    start adbd
+
+on property:sys.usb.config=fastboot
+    start fastbootd
+
+on property:sys.usb.config=none && property:sys.usb.configfs=0
+    stop adbd
+    stop fastbootd
+    write /sys/class/android_usb/android0/enable 0
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=adb && property:sys.usb.configfs=0
+    write /sys/class/android_usb/android0/idProduct ${ro.recovery.usb.adb.pid}
+    write /sys/class/android_usb/android0/functions adb
+    write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=sideload && property:sys.usb.configfs=0
+    write /sys/class/android_usb/android0/idProduct ${ro.recovery.usb.adb.pid}
+    write /sys/class/android_usb/android0/functions adb
+    write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=fastboot && property:sys.usb.configfs=0
+    write /sys/class/android_usb/android0/idProduct ${ro.recovery.usb.fastboot.pid}
+    write /sys/class/android_usb/android0/functions fastboot
+    write /sys/class/android_usb/android0/enable 1
+    setprop sys.usb.state ${sys.usb.config}
+
+# Configfs triggers
+on property:sys.usb.config=none && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/UDC "none"
+    stop adbd
+    stop fastbootd
+    setprop sys.usb.ffs.ready 0
+    rm /config/usb_gadget/g1/configs/b.1/f1
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=sideload && property:sys.usb.ffs.ready=1 && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/idProduct 0x${ro.recovery.usb.adb.pid}
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=adb && property:sys.usb.ffs.ready=1 && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/idProduct 0x${ro.recovery.usb.adb.pid}
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "adb"
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=fastboot && property:sys.usb.ffs.ready=1 && property:sys.usb.configfs=1
+    write /config/usb_gadget/g1/idProduct 0x${ro.recovery.usb.fastboot.pid}
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "fastboot"
+    symlink /config/usb_gadget/g1/functions/ffs.fastboot /config/usb_gadget/g1/configs/b.1/f1
+    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+    setprop sys.usb.state ${sys.usb.config}

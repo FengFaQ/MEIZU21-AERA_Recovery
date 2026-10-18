@@ -1,0 +1,10 @@
+Source: https://github.com/LineageOS/android_external_htop
+Branch: lineage-23.2
+Commit: ff411eb6f0b716294440dbb5b24a090a1ad67af9
+Version: 3.4.1
+
+The Linux/Android source and headers are bundled here so recovery builds do not
+require another manifest project. Copyright and GPL terms remain unchanged.
+The binary is installed as /system/bin/htop and links to the existing recovery
+ncurses library. Optional libcap and libnl delay-accounting support are disabled
+to avoid additional recovery libraries.

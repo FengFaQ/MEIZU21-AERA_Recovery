@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#terminalPanel{grid-column:1/-1;min-width:0}
+.terminal-heading{flex-wrap:wrap}
+.terminal-heading h2{margin-bottom:3px}
+.terminal-tools{display:flex;align-items:center;gap:10px}
+.terminal-tools button{padding:9px;min-width:42px;min-height:42px}
+.terminal-tools span{margin-right:6px;max-width:280px;overflow-wrap:anywhere}
+.terminal-surface{height:580px;min-height:380px;max-height:calc(100dvh - 260px);border:1px solid var(--line);border-radius:6px;background:var(--canvas);overflow:hidden;position:relative}
+#terminalFrame{width:100%;height:100%;display:block;border:0}
+.terminal-empty{height:100%;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--muted);font-size:15px;overflow-wrap:anywhere}
+#terminalPanel:fullscreen{background:var(--canvas);padding:20px;display:flex;flex-direction:column}
+#terminalPanel:fullscreen .terminal-surface{max-height:none;height:auto;min-height:0;flex:1}
+@media(max-width:760px){.terminal-surface{height:520px;max-height:calc(100dvh - 280px);min-height:340px}.terminal-tools{gap:8px}.terminal-tools span{max-width:180px}}
+@media(max-width:760px){.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}}

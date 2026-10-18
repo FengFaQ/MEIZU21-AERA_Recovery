@@ -1,0 +1,9 @@
+# /sbin is kept in LD_LIBRARY_PATH even though AERA symlinks /sbin -> /system/bin
+# (aera-16.0 etc/init.rc: "rmdir /sbin", "symlink /system/bin /sbin"). Both
+# reference AERA trees (oneplus_infiniti, xiaomi_garnet) ship this exact value, and
+# on this device /sbin/... resolves away harmlessly. Do not "fix" it.
+service start_crypto_services /vendor/bin/start_crypto_services.sh
+    user root
+    group root
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    seclabel u:r:recovery:s0

@@ -1,0 +1,24 @@
+bootstrap_go_package {
+    name: "soong-aera_host_defaults",
+    pkgPath: "bootable/recovery/aeraui/build",
+    deps: [
+        "soong",
+        "soong-android",
+        "soong-cc"
+    ],
+    srcs: [
+        "aeraui_defaults.go",
+        "../../soong/copy.go",
+        "../../soong/makevars.go",
+        "../../aera_defaults.go"
+    ],
+    pluginFor: ["soong_build"]
+}
+
+aera_host_defaults {
+    name: "aera_host_defaults"
+}
+
+aeraui_defaults {
+    name: "aeraui_defaults"
+}

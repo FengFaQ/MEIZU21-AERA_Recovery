@@ -1,0 +1,58 @@
+--- a/Source/WebKit/UIProcess/wpe/WebPreferencesWPE.cpp
++++ b/Source/WebKit/UIProcess/wpe/WebPreferencesWPE.cpp
+@@ -25,20 +25,10 @@
+ #include "config.h"
+ #include "WebPreferences.h"
+-#include <unistd.h>
+ 
+ namespace WebKit {
+ 
+ void WebPreferences::platformInitializeStore()
+ {
+-    if (getuid() == 99090) {
+-        // Aera recovery uses Cairo snapshots into its fixed SHM bridge. This
+-        // avoids Mesa/EGL and any GPU device access in the browser jail.
+-        setAcceleratedCompositingEnabled(false);
+-        setForceCompositingMode(false);
+-        setThreadedScrollingEnabled(false);
+-        return;
+-    }
+     setAcceleratedCompositingEnabled(true);
+     setForceCompositingMode(true);
+     setThreadedScrollingEnabled(true);
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphics.cpp
+@@ -267,8 +267,6 @@ bool DrawingAreaCoordinatedGraphics::enterAcceleratedCompositingModeIfNeeded()
+     ASSERT(!m_layerTreeHost);
+     if (!m_alwaysUseCompositing) {
+ #if PLATFORM(WPE)
+-        if (getuid() == 99090)
+-            return false;
+         m_nonCompositedFrameRenderer = NonCompositedFrameRenderer::create(m_webPage);
+ #endif
+         return false;
+--- a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
++++ b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
+@@ -223,8 +223,7 @@ void WebProcess::platformInitializeWebProcess(WebProcessCreationParameters&& par
+             initializePlatformDisplayIfNeeded();
+     }
+ #else
+-    if (getuid() != 99090)
+-        initializePlatformDisplayIfNeeded();
++    initializePlatformDisplayIfNeeded();
+ #endif
+ #endif
+
+--- a/Source/WebKit/WPEPlatform/wpe/headless/WPEViewHeadless.cpp
++++ b/Source/WebKit/WPEPlatform/wpe/headless/WPEViewHeadless.cpp
+@@ -107,7 +107,9 @@ static gboolean wpeViewHeadlessRenderBuffer(WPEView* view, WPEBuffer* buffer, co
+     auto now = g_get_monotonic_time();
+     if (!priv->lastFrameTime)
+         priv->lastFrameTime = now;
+-    auto next = priv->lastFrameTime + (G_USEC_PER_SEC / 60);
++    // AERA presents on a 120 Hz phone panel. Do not discard every other
++    // compositor frame in the generic headless backend.
++    auto next = priv->lastFrameTime + (G_USEC_PER_SEC / 120);
+     priv->lastFrameTime = now;
+     if (next <= now)
+         g_source_set_ready_time(priv->frameSource.get(), 0);

@@ -1,0 +1,208 @@
+name: AERA Recovery for Meizu 21 (m2461)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'device/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aera-m2461-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # This monorepo doubles as the repo manifest: default.xml at the repo root.
+  MANIFEST_URL: https://github.com/FengFaQ/MEIZU21-AERA_Recovery
+  MANIFEST_BRANCH: main
+  LUNCH_TARGET: twrp_m2461-bp2a-eng
+  DEVICE_DIR: device/meizu/m2461
+  CCACHE_DIR: /home/runner/.ccache
+  CCACHE_MAXSIZE: 5G
+
+jobs:
+  build:
+    name: Sync AERA 16.0 and build recovery.img
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      # ------------------------------------------------------------- space
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 3072
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      # ------------------------------------------------------------ toolchain
+      - name: Setup environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 unzip xz-utils lz4 rsync
+          # current repo bootstrap (works with the AERA manifest chain)
+          curl -sSL -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          chmod a+x /usr/local/bin/repo
+          git config --global user.name "AERA CI"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global color.ui false
+          git config --global core.fsmonitor false || true
+          repo --version
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: aera-16.0-m2461
+          max-size: 5G
+
+      - name: Setup swap
+        run: |
+          sudo fallocate -l 8G /swapfile || true
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile || true
+          sudo swapon /swapfile || true
+          free -h
+
+      # ------------------------------------------------------------- source
+      - name: Checkout monorepo (manifest + AERA sources + device tree)
+        uses: actions/checkout@v4
+        with:
+          path: mono
+
+      - name: Report disk
+        run: df -h / && free -h
+
+      - name: repo init (this repo is the manifest)
+        run: |
+          mkdir -p aosp
+          cd aosp
+          repo init --no-clone-bundle -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+
+      # The consolidated AERA sources (bootable/recovery, external/lvgl,
+      # vendor/recovery) ship inside this monorepo; skip pulling them from the
+      # AERA-Recovery org and overlay them below.
+      - name: Local manifest - skip AERA repos shipped in the monorepo
+        run: |
+          cd aosp
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/00-meizu21.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <remove-project name="android_bootable_recovery" />
+            <remove-project name="android_external_lvgl" />
+            <remove-project name="android_vendor_recovery" />
+          </manifest>
+          XML
+          cat .repo/local_manifests/00-meizu21.xml
+
+      - name: repo sync
+        run: |
+          cd aosp
+          # retry a few times: android.googlesource.com occasionally 429s
+          for i in 1 2 3; do
+            echo "attempt $i ..."
+            repo sync -c --force-sync --no-tags -j"$(nproc --all)" && break
+            echo "sync attempt $i failed; retrying in 30s"
+            sleep 30
+          done
+          df -h / | tail -1
+
+      - name: Overlay consolidated AERA sources + install device tree
+        run: |
+          cd aosp
+          rm -rf bootable/recovery external/lvgl vendor/recovery "$DEVICE_DIR"
+          cp -a ../mono/android_bootable_recovery bootable/recovery
+          cp -a ../mono/android_external_lvgl external/lvgl
+          cp -a ../mono/android_vendor_recovery vendor/recovery
+          mkdir -p "$(dirname "$DEVICE_DIR")"
+          cp -a ../mono/device/meizu/m2461 "$DEVICE_DIR"
+          echo "== tree present =="
+          test -s "$DEVICE_DIR/prebuilt/kernel" && echo "kernel OK"
+          test -d "$DEVICE_DIR/recovery/root" && echo "recovery/root OK"
+          test -f bootable/recovery/AERA_A16.sh && echo "recovery source OK"
+          test -f vendor/recovery/AERA_A16.sh && echo "vendor/recovery OK" || ls vendor/recovery | head
+          test -f external/lvgl/lvgl.h && echo "lvgl OK"
+          ls "$DEVICE_DIR" | head -20
+
+      # -------------------------------------------------------------- build
+      - name: Build AERA recovery
+        run: |
+          cd aosp
+          set -o pipefail
+          source build/envsetup.sh
+          lunch "$LUNCH_TARGET"
+          # log the chosen config for debugging
+          get_build_var TARGET_PRODUCT 2>/dev/null || true
+          get_build_var TARGET_BUILD_VARIANT 2>/dev/null || true
+          mka adbd recoveryimage 2>&1 | tee /tmp/build.log
+          rc=${PIPESTATUS[0]}
+          exit $rc
+
+      - name: Save build log on failure
+        if: failure()
+        run: |
+          mkdir -p boot-log
+          [ -f /tmp/build.log ] && cp /tmp/build.log boot-log/build.log || true
+          [ -f aosp/out/verbose.log.gz ] && cp aosp/out/verbose.log.gz boot-log/ || true
+          [ -f aosp/out/error.log ] && cp aosp/out/error.log boot-log/ || true
+          ls -la boot-log
+
+      # ---------------------------------------------------------- artefacts
+      - name: Collect artefacts
+        if: always()
+        run: |
+          mkdir -p artefacts
+          OUT=aosp/out/target/product/m2461
+          cp -v "$OUT/recovery.img" artefacts/ 2>/dev/null || true
+          cp -v "$OUT/adbd" artefacts/ 2>/dev/null || true
+          ls -la artefacts || true
+          if [ -f artefacts/recovery.img ]; then
+            sha256sum artefacts/recovery.img > artefacts/recovery.img.sha256
+            du -h artefacts/recovery.img
+          fi
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: boot-log/
+          retention-days: 14
+
+      - name: Upload recovery image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-image-${{ github.run_number }}
+          path: artefacts/
+          retention-days: 30
+
+      - name: Create prerelease
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AERA-m2461-${{ github.run_number }}
+          tag_name: aera-m2461-${{ github.run_number }}
+          prerelease: true
+          files: |
+            artefacts/recovery.img
+            artefacts/recovery.img.sha256
+          body: |
+            AERA Recovery R1.0 (aera-16.0) for Meizu 21 (m2461)
+
+            - manifest: this repo (main), AERA 16.0 chain (default.xml -> twrp-default.xml -> aera.xml)
+            - device tree commit: `${{ github.sha }}`
+            - kernel: stock M2461 `Image` (6.1.25-android14-11-maybe-dirty)
+
+            Flash:
+            ```
+            fastboot flash recovery_a recovery.img
+            fastboot flash recovery_b recovery.img
+            ```

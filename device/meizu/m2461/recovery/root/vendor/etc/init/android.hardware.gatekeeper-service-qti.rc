@@ -1,0 +1,16 @@
+# Copyright (c) 2021 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+# Meizu 21 (m2461, SM8650) - ported from the verified TWRP recovery tree.
+# Started once qseecomd has registered its listeners; libqtigatekeeper reaches
+# its trustlet through QSEECom. system.prop sets vendor.gatekeeper.disable_spu=true
+# and vendor.gatekeeper.is_security_level_spu=0, so only the non-SPU trustlet
+# path is used on this device (the *-spu-qti binaries are shipped but never
+# started).
+service vendor.gatekeeper_default /vendor/bin/hw/android.hardware.gatekeeper-service-qti
+    disabled
+    user root
+    group root
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    seclabel u:r:recovery:s0

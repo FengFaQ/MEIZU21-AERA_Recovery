@@ -1,0 +1,23 @@
+otaripper 3.5.0
+https://github.com/syedinsaf/otaripper
+Revision: 49289575260a5c7a4d2af0cb4be949cd2dcf138a
+License: Apache-2.0 (see source/LICENSE)
+Author: Syed Insaf
+
+AERA additions in source/src/cmd:
+- --aera recovery integration mode with an exact, empty output directory.
+- Machine-readable progress at 10 Hz, explicit partition selection and strict hashes.
+- Safe partition names and bounded XZ/ZSTD decoder memory in recovery mode.
+- ZSTD (REPLACE_ZSTD, operation 14) enabled in the verified direct writer.
+- Disable terminal decoration/metadata scanning in recovery mode.
+- Explicit --aera-block-fd direct-write phase using only an inherited block fd.
+  Independently checks the reviewed manifest, extent coverage, bounded codecs and
+  operation SHA-256; writes zero/discard extents explicitly. Does not create,
+  truncate or unlink targets. AERA claims/resizes/unmounts targets and requires
+  flushed block readback SHA-256 before reporting success; no slot activation.
+  Direct flashing is an Advanced opt-in, not an update_engine replacement.
+
+Only the offline feature set is built; no HTTP client is included.
+The prebuilt is for Android/Bionic ARM64, API 28 or newer.
+Other recovery architectures continue using the built-in extractor.
+build.sh reproduces the binary from the included source and locked dependencies.

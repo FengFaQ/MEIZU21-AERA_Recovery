@@ -1,0 +1,192 @@
+// Copyright (C) 2018 The Android Open Source Project
+// Copyright (C) 2019 The LineageOS Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// This file is part of the OrangeFox Recovery Project
+// Copyright (C) 2018-2026 The OrangeFox Recovery Project
+//
+
+subdirs = [
+    "bootloader_message",
+]
+
+// *** THIS PACKAGE HAS SPECIAL LICENSING CONDITIONS.  PLEASE
+//     CONSULT THE OWNERS AND opensource-licensing@google.com BEFORE
+//     DEPENDING ON IT IN YOUR PROJECT. ***
+package {
+    default_applicable_licenses: ["bootable_recovery_license"],
+}
+
+// Added automatically by a large-scale-change that took the approach of
+// 'apply every license found to every target'. While this makes sure we respect
+// every license restriction, it may not be entirely correct.
+//
+// e.g. GPL in an MIT project might only apply to the contrib/ directory.
+//
+// Please consider splitting the single license below into multiple licenses,
+// taking care not to lose any license_kind information, and overriding the
+// default license using the 'licenses: [...]' property on targets as needed.
+//
+// For unused files, consider creating a 'fileGroup' with "//visibility:private"
+// to attach the license to, and including a comment whether the files may be
+// used in the current project.
+// See: http://go/android-license-faq
+license {
+    name: "bootable_recovery_license",
+    visibility: [
+        ":__subpackages__",
+    ],
+    license_kinds: [
+        "SPDX-license-identifier-Apache-2.0",
+        "SPDX-license-identifier-MIT",
+        "SPDX-license-identifier-OFL", // by exception only
+    ],
+    license_text: [
+        "NOTICE",
+    ],
+}
+
+cc_defaults {
+    name: "recovery_defaults",
+
+    cflags: [
+        "-D_FILE_OFFSET_BITS=64",
+
+        // Must be the same as RECOVERY_API_VERSION.
+        "-DRECOVERY_API_VERSION=3",
+
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-Wno-unused-function",
+        "-Wno-unused-variable",
+    ],
+}
+
+bootstrap_go_package {
+    name: "soong-libaosprecovery_defaults",
+    pkgPath: "bootable/recovery/libaosprecovery",
+    deps: [
+        "soong",
+        "soong-android",
+        "soong-cc"
+    ],
+    srcs: [
+        "libaosprecovery_defaults.go",
+        "soong/makevars.go"
+    ],
+    pluginFor: ["soong_build"]
+}
+
+libaosprecovery_defaults {
+    name: "libaosprecovery_defaults"
+}
+
+cc_library_shared {
+    name: "libaosprecovery",
+    defaults: ["libaosprecovery_defaults"],
+    cflags: [
+        "-std=gnu++2a",
+        "-DRECOVERY_API_VERSION=3"
+    ],
+    include_dirs: [
+        "bootable/recovery/install/include",
+        "bootable/recovery/recovery_ui/include",
+        "bootable/recovery/recovery_utils/include",
+        "bootable/recovery/otautil/include",
+        "bootable/recovery/minadbd",
+        "bootable/recovery/minadbd/include",
+        "bootable/recovery/minzip",
+        "bootable/recovery/twrpinstall/include",
+        "system/libvintf/include"
+    ],
+    srcs: [
+        "install/adb_install.cpp",
+        "install/get_args.cpp", 
+        "install/install.cpp",
+        "install/spl_check.cpp",
+        "install/wipe_data.cpp",
+        "install/wipe_device.cpp",
+        "install/set_metadata.cpp",
+        "install/ZipUtil.cpp"
+    ],
+    shared_libs: [
+        "libbase",
+        "libbootloader_message",
+        "libcrypto",
+        "libext4_utils",
+        "libfs_mgr", 
+        "libfusesideload", 
+        "libhidl-gen-utils",
+        "libhidlbase",
+        "liblog",
+        "libselinux",
+        "libtinyxml2",
+        "libutils",
+        "libz",
+        "libziparchive",
+        "libcutils",
+        "libc++"
+    ],
+    static_libs: [
+        "libinstall",
+        "librecovery_fastboot",
+        "libminui",
+        "libotautil",
+        "libvintf", 
+        "libhidl-gen-utils",
+        "librecovery_utils",
+        "libprotobuf-cpp-lite",
+        "ota_metadata_proto_cc",
+        "update_metadata-protos"
+    ],
+    required: [
+        "init_recovery.rc",
+        "ueventd.rc.recovery",
+        "libdl_android.bootstrap",
+        "ziptool.recovery"
+    ]
+}
+
+cc_library_static {
+    name: "librecovery_fastboot",
+    recovery_available: true,
+    defaults: [
+        "recovery_defaults",
+    ],
+
+    srcs: [
+        "fastboot/fastboot.cpp",
+    ],
+
+    shared_libs: [
+        "libbase",
+        "libbootloader_message",
+        "libcutils",
+        "liblog",
+        "librecovery_ui",
+    ],
+
+    static_libs: [
+        "librecovery_ui_default",
+    ],
+}
+
+prebuilt_etc {
+    name: "init_recovery.rc",
+    filename: "init.rc",
+    src: "etc/init.rc",
+    sub_dir: "init/hw",
+    recovery: true,
+}

@@ -1,0 +1,54 @@
+#!/system/bin/sh
+#
+# nano: set up and run prebuilt nano from recovery/terminal
+# osm0sis @ xda-developers
+# DarthJabba9  @ xda-developers
+# Date: 23 February 2025
+
+NANO_DIR=/AERA/Files/nano;
+nano_bin=$NANO_DIR/bin/nano.bin;
+ETC_TNFO_DIR=/system/etc/terminfo;
+
+if [ -e $nano_bin ] && [ ! -x $nano_bin ]; then
+   chmod 0755 $nano_bin;
+fi
+
+# help screen
+if [ "$1" = "--help" -o "$1" = "-h" ]; then
+    echo "Usage = $0 [--help2] [--term <terminal>] [arguments]"
+    F=/AERA/Files/nano/terminals.txt;
+    [ -e $F ] && cat $F;
+    exit 0;
+elif [ "$1" = "--help2" -o "$1" = "-h2" ]; then
+    $nano_bin --help;
+    exit 0;
+fi
+
+# terminal
+if [ "$1" == "--term" ]; then
+   term=$2;
+   shift 2;
+else
+   if [ -n "$TERM" ]; then
+	term=$TERM;
+   else
+	term=pcansi;
+   fi
+fi
+
+# *************************************
+DEFAULT_ARGS="-A -l -u -y -w -c";
+# *************************************
+
+clear;
+
+OLD_TERM=$TERM;
+export TERM=$term;
+[ -d $ETC_TNFO_DIR"/x/" ] && export TERMINFO="$ETC_TNFO_DIR" || export TERMINFO=$NANO_DIR/terminfo;
+
+$nano_bin $DEFAULT_ARGS "$@";
+
+export TERM=$OLD_TERM;
+
+clear;
+#

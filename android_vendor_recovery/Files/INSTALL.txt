@@ -1,0 +1,10 @@
+AERA Recovery Project installation
+==================================
+
+This package contains AERA Recovery Project R1.0.
+
+Confirm that the package was built for your exact device before flashing.
+For OnePlus 13, the device codename is `dodge`. Flash the recovery image only
+to the partition selected by the device tree and boot configuration.
+
+Keep a known-good stock image available before testing development builds.

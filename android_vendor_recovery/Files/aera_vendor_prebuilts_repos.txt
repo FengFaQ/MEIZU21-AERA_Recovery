@@ -1,0 +1,20 @@
+Vendor tree prebuilts - sources/origins:
+
+aapt		- https://github.com/rendiix/termux-aapt.git  [upstream prebuilt binaries only]
+bash 		- https://ftp.gnu.org/gnu/bash/bash-5.0.tar.gz
+busybox 	- https://xdaforums.com/attachments/update-busybox-installer-v1-36-1-all-signed-zip.6000117/ (prebuilt binaries)
+date		- https://ftp.gnu.org/gnu/coreutils/coreutils-9.6.tar.xz
+dmsetup		- https://github.com/michael42/dmcrypt-static-android.git
+fsck.erofs	- https://github.com/erofs/erofs-utils.git ["-b dev"]
+gnu grep 	- https://ftp.gnu.org/gnu/grep/grep-3.6.tar.gz
+gnu sed 	- https://ftp.gnu.org/gnu/sed/sed-4.5.tar.xz
+gnu tar		- https://ftp.gnu.org/gnu/tar/tar-1.28.tar.gz
+lz4		- ([fox_12.1_manifest_dir]/external/lz4)
+patchelf	- https://github.com/NixOS/patchelf.git
+magiskboot	- https://github.com/nilz3000/Magisk.git ["-b vendor_boot_v4_table"; 'updated'="-b vendor_boot_v4_updates"]
+nano 		- https://github.com/Magisk-Modules-Repo/nano-ndk.git [upstream prebuilt binaries only]
+patchelf	- https://github.com/NixOS/patchelf.git
+xz utils 	- https://github.com/tukaani-project/xz.git ["-b v5.2"]
+zstd 		- ([fox_12.1_manifest_dir]/external/zstd)
+zip		- ([fox_12.1_manifest_dir]/external/zip)
+

@@ -1,0 +1,529 @@
+#include "kernel_module_loader.hpp"
+#include "common.h"
+#include "variables.h"
+#include "data.hpp"
+#include <cutils/properties.h>
+#include <dirent.h>
+
+#ifdef TW_INCLUDE_CRYPTO
+#include <android-base/file.h>
+#include <android-base/strings.h>
+#include <sys/mount.h>
+
+static void ResetProp(const std::string& key, const std::string& value) {
+	if (value.empty())
+		return;
+
+	std::string cmd = "/system/bin/resetprop " + key + " " + value;
+	TWFunc::Exec_Cmd(cmd);
+}
+#endif
+
+#ifdef TW_LOAD_VENDOR_MODULES
+const std::vector<std::string> kernel_modules_requested =
+	TWFunc::split_string(EXPAND(TW_LOAD_VENDOR_MODULES), ' ', true);
+#else
+const std::vector<std::string> kernel_modules_requested;
+#endif
+
+#ifdef TW_POST_DECRYPT_MODULES
+const std::vector<std::string> post_decrypt_modules_requested =
+	TWFunc::split_string(EXPAND(TW_POST_DECRYPT_MODULES), ' ', true);
+#else
+const std::vector<std::string> post_decrypt_modules_requested;
+#endif
+
+static const std::string post_decrypt_stage_dir = "/tmp/post_decrypt_modules";
+
+BOOT_MODE KernelModuleLoader::Get_Boot_Mode() {
+	std::string cmdline;
+	std::string bootconfig;
+	android::base::ReadFileToString("/proc/bootconfig", &bootconfig);
+	android::base::ReadFileToString("/proc/cmdline", &cmdline);
+
+	if (cmdline.find("twrpfastboot=1") != std::string::npos &&
+		(bootconfig.find("androidboot.force_normal_boot = \"1\"") != std::string::npos ||
+		 cmdline.find("androidboot.force_normal_boot=1") != std::string::npos))
+		return RECOVERY_FASTBOOT_MODE;
+	else if (android::base::GetProperty(TW_FASTBOOT_MODE_PROP, "0") == "1")
+		return FASTBOOTD_MODE;
+
+	return RECOVERY_IN_BOOT_MODE;
+}
+
+static bool Find_Module_Recursive(const std::string& base_dir,
+                                  const std::string& module_name,
+                                  std::string& found_path,
+                                  int depth = 0) {
+	if (depth > 4)
+		return false;
+
+	DIR* d = opendir(base_dir.c_str());
+	if (!d)
+		return false;
+
+	struct dirent* de;
+	while ((de = readdir(d)) != nullptr) {
+		std::string name = de->d_name;
+
+		if (name == "." || name == "..")
+			continue;
+
+		std::string path = base_dir + "/" + name;
+
+		if (de->d_type == DT_REG && name == module_name) {
+			found_path = path;
+			closedir(d);
+			return true;
+		}
+
+		if (de->d_type == DT_DIR) {
+			if (Find_Module_Recursive(path, module_name, found_path, depth + 1)) {
+				closedir(d);
+				return true;
+			}
+		}
+	}
+
+	closedir(d);
+	return false;
+}
+
+bool KernelModuleLoader::Stage_Post_Decrypt_Modules() {
+	if (post_decrypt_modules_requested.empty()) {
+		LOGINFO("No post-decrypt modules requested\n");
+		return true;
+	}
+
+	LOGINFO("Staging post-decrypt modules\n");
+
+	TWFunc::Recursive_Mkdir(post_decrypt_stage_dir);
+
+	std::vector<std::string> search_dirs = {
+		SYSTEM_DLKM_MODULE_DIR,
+		VENDOR_DLKM_MODULE_DIR
+	};
+
+	std::string module_list;
+	int staged_count = 0;
+
+	for (const auto& mod : post_decrypt_modules_requested) {
+		bool found = false;
+
+		for (const auto& dir : search_dirs) {
+			std::string src;
+
+			/*
+			 * First check the direct path:
+			 *   /system_dlkm/lib/modules/module.ko
+			 *   /vendor_dlkm/lib/modules/module.ko
+			 */
+			std::string direct_src = dir + "/" + mod;
+			if (TWFunc::Path_Exists(direct_src)) {
+				src = direct_src;
+			} else {
+				/*
+				 * Then search one level inside:
+				 *   /system_dlkm/lib/modules/<folder>/module.ko
+				 *   /vendor_dlkm/lib/modules/<folder>/module.ko
+				 *
+				 * This catches layouts like:
+				 *   /system_dlkm/lib/modules/6.1-gki/module.ko
+				 */
+				DIR* d = opendir(dir.c_str());
+				if (d != nullptr) {
+					struct dirent* de;
+
+					while ((de = readdir(d)) != nullptr) {
+						std::string name = de->d_name;
+
+						if (name == "." || name == "..")
+							continue;
+
+						std::string subdir = dir + "/" + name;
+						std::string sub_src = subdir + "/" + mod;
+
+						if (TWFunc::Path_Exists(sub_src)) {
+							src = sub_src;
+							break;
+						}
+					}
+
+					closedir(d);
+				}
+
+				/*
+				 * GKI system_dlkm images commonly keep modules below a
+				 * versioned kernel tree (for example
+				 * lib/modules/<release>/kernel/net/rfkill/rfkill.ko).
+				 * Resolve that installed, active-slot copy instead of
+				 * requiring a device tree to bundle a firmware-specific
+				 * duplicate in the recovery ramdisk.
+				 */
+				if (src.empty())
+					Find_Module_Recursive(dir, mod, src);
+			}
+
+			if (!src.empty()) {
+				std::string dst = post_decrypt_stage_dir + "/" + mod;
+
+				if (TWFunc::copy_file(src, dst, 0700, false) == 0) {
+					LOGINFO("Staged post-decrypt module: %s -> %s\n", src.c_str(), dst.c_str());
+					module_list += mod + "\n";
+					staged_count++;
+				} else {
+					LOGINFO("Failed to stage post-decrypt module: %s\n", src.c_str());
+				}
+
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			LOGINFO("Post-decrypt module not found in system_dlkm/vendor_dlkm: %s\n", mod.c_str());
+		}
+	}
+
+	std::string module_file = post_decrypt_stage_dir + "/modules.load.postdecrypt";
+	TWFunc::write_to_file(module_file, module_list);
+
+	LOGINFO("Staged %d post-decrypt modules\n", staged_count);
+	return true;
+}
+
+bool KernelModuleLoader::Load_Post_Decrypt_Modules() {
+	if (post_decrypt_modules_requested.empty()) {
+		LOGINFO("No post-decrypt modules requested for loading\n");
+		property_set("post.decrypt.modules", "true");
+		return true;
+	}
+
+	std::vector<std::string> loaded_modules;
+	std::string kernel_module_file = "/proc/modules";
+	if (TWFunc::read_file(kernel_module_file, loaded_modules) < 0)
+		LOGINFO("failed to get loaded kernel modules before post-decrypt load\n");
+
+	int modules_loaded = 0;
+
+	for (const auto& mod : post_decrypt_modules_requested) {
+		bool already_loaded = false;
+
+		for (auto&& module_line : loaded_modules) {
+			auto module = TWFunc::Split_String(module_line, " ")[0];
+			if ((module + ".ko") == mod) {
+				LOGINFO("Post-decrypt module already loaded: %s\n", mod.c_str());
+				already_loaded = true;
+				break;
+			}
+		}
+
+		if (already_loaded)
+			continue;
+
+		std::string full_path = post_decrypt_stage_dir + "/" + mod;
+		if (!TWFunc::Path_Exists(full_path)) {
+			LOGINFO("Post-decrypt staged module missing: %s\n", full_path.c_str());
+			continue;
+		}
+
+		std::string cmd = "insmod " + full_path;
+		LOGINFO("Loading post-decrypt module: %s\n", full_path.c_str());
+
+		int rc = TWFunc::Exec_Cmd(cmd);
+		if (rc == 0) {
+			LOGINFO("Post-decrypt module loaded: %s\n", mod.c_str());
+			modules_loaded++;
+		} else {
+			LOGINFO("Post-decrypt module failed to load: %s (rc=%d)\n", mod.c_str(), rc);
+		}
+	}
+
+	LOGINFO("Loaded %d post-decrypt modules\n", modules_loaded);
+	property_set("post.decrypt.modules", "true");
+	return true;
+}
+
+bool KernelModuleLoader::Load_Vendor_Modules() {
+	// check /lib/modules (ramdisk vendor_boot)
+	// check /lib/modules/N.N (ramdisk vendor_boot)
+	// check /lib/modules/N.N-gki (ramdisk vendor_boot)
+	// check /vendor/lib/modules (ramdisk)
+	// check /vendor/lib/modules/1.1 (ramdisk prebuilt modules)
+	// check /vendor/lib/modules/N.N (vendor mounted)
+	// check /vendor/lib/modules/N.N-gki (vendor mounted)
+	// check /vendor_dlkm/lib/modules (vendor_dlkm mounted)
+
+	if (android::base::GetBoolProperty(TW_MODULES_MOUNTED_PROP, false))
+		return true;
+
+	int modules_loaded = 0;
+#ifdef TW_INCLUDE_CRYPTO
+	std::string vendor_patch;
+	std::string system_patch;
+	TWPartition* sysroot = PartitionManager.Find_Partition_By_Path("/system_root");
+#endif
+
+	LOGINFO("Attempting to load modules\n");
+	std::string vendor_base_dir(VENDOR_MODULE_DIR);
+	std::string base_dir(VENDOR_BOOT_MODULE_DIR);
+	std::string vendor_dlkm_base_dir(VENDOR_DLKM_MODULE_DIR);
+	std::vector<std::string> module_dirs;
+	std::vector<std::string> vendor_module_dirs;
+
+	TWPartition* ven = PartitionManager.Find_Partition_By_Path("/vendor");
+	TWPartition* ven_dlkm = PartitionManager.Find_Partition_By_Path("/vendor_dlkm");
+	TWPartition* sys_dlkm = PartitionManager.Find_Partition_By_Path("/system_dlkm");
+
+	vendor_module_dirs.push_back(VENDOR_MODULE_DIR);
+	vendor_module_dirs.push_back(vendor_base_dir + "/1.1");
+
+	module_dirs.push_back(base_dir);
+
+	struct utsname uts;
+	if (uname(&uts)) {
+		LOGERR("Unable to query kernel for version info\n");
+	}
+
+	std::string rls(uts.release);
+	std::vector<std::string> release = TWFunc::split_string(rls, '.', true);
+	int expected_module_count = kernel_modules_requested.size();
+
+	if (release.size() >= 2) {
+		module_dirs.push_back(base_dir + "/" + release[0] + "." + release[1]);
+#ifndef TW_LOAD_VENDOR_MODULES_EXCLUDE_GKI
+		std::string gki = "/" + release[0] + "." + release[1] + "-gki";
+		module_dirs.push_back(base_dir + gki);
+		vendor_module_dirs.push_back(vendor_base_dir + gki);
+#endif
+	}
+
+	TWFunc::RunFoxScript("/system/bin/beforemodules.sh", "");
+
+	switch(Get_Boot_Mode()) {
+		case RECOVERY_FASTBOOT_MODE:
+			/* On bootmode: once, there is not always stock kernel
+			 * so try only with twrp prebuilt modules.
+			 */
+			for (auto&& module_dir : vendor_module_dirs) {
+				modules_loaded += Try_And_Load_Modules(module_dir, false);
+				if (modules_loaded >= expected_module_count)
+					goto stage_only_exit;
+			}
+			break;
+
+		case FASTBOOTD_MODE:
+		case RECOVERY_IN_BOOT_MODE:
+#ifdef TW_LOAD_VENDOR_BOOT_MODULES
+			for (auto&& module_dir : module_dirs) {
+				modules_loaded += Try_And_Load_Modules(module_dir, false);
+				if (modules_loaded >= expected_module_count)
+					goto stage_only_exit;
+			}
+#endif
+			/* In both mode vendor_boot or vendor modules are used
+			 * Because Ramdisk is flashed in both.
+			 */
+			break;
+	}
+
+#ifdef TW_LOAD_PREBUILT_MODULES_AT_FIRST
+	for (auto&& module_dir : vendor_module_dirs) {
+		modules_loaded += Try_And_Load_Modules(module_dir, true);
+		if (modules_loaded >= expected_module_count)
+			goto stage_only_exit;
+	}
+#endif
+
+	if (ven) {
+		LOGINFO("Checking mounted /vendor\n");
+		ven->Mount(true);
+	}
+
+#ifdef TW_INCLUDE_CRYPTO
+	LOGINFO("Beginning override security patch...\n");
+
+	vendor_patch = TWFunc::Partition_Property_Get("ro.vendor.build.security_patch", PartitionManager, "/vendor", "build.prop");
+
+	if (!vendor_patch.empty()) {
+		ResetProp("ro.vendor.build.security_patch", vendor_patch);
+	}
+
+	if (sysroot) {
+		sysroot->Mount(true);
+	} else {
+		TWFunc::Recursive_Mkdir("/system_root");
+		mount("/system", "/system_root", "", MS_BIND, NULL);
+	}
+
+	system_patch = TWFunc::Partition_Property_Get("ro.build.version.security_patch", PartitionManager, "/system_root", "build.prop");
+
+	if (!system_patch.empty()) {
+		ResetProp("ro.build.version.security_patch", system_patch);
+	}
+
+	LOGINFO("Ending override security patch...\n");
+#endif
+
+	if (ven_dlkm) {
+		LOGINFO("Checking mounted /vendor_dlkm\n");
+		ven_dlkm->Mount(true);
+	}
+
+#ifdef TW_POST_DECRYPT_MODULES
+	if (sys_dlkm) {
+		LOGINFO("Checking mounted /system_dlkm for post-decrypt staging\n");
+		sys_dlkm->Mount(true);
+	}
+	Stage_Post_Decrypt_Modules();
+#endif
+
+	for (auto&& module_dir : vendor_module_dirs) {
+		modules_loaded += Try_And_Load_Modules(module_dir, true);
+		if (modules_loaded >= expected_module_count)
+			goto exit;
+	}
+
+	modules_loaded += Try_And_Load_Modules(vendor_dlkm_base_dir, true);
+	if (modules_loaded >= expected_module_count)
+		goto exit;
+
+	goto exit;
+
+stage_only_exit:
+#ifdef TW_POST_DECRYPT_MODULES
+	if (ven_dlkm) {
+		LOGINFO("Checking mounted /vendor_dlkm for post-decrypt staging\n");
+		ven_dlkm->Mount(true);
+	}
+	if (sys_dlkm) {
+		LOGINFO("Checking mounted /system_dlkm for post-decrypt staging\n");
+		sys_dlkm->Mount(true);
+	}
+	Stage_Post_Decrypt_Modules();
+#endif
+
+exit:
+	if (ven)
+		ven->UnMount(false);
+	if (ven_dlkm)
+		ven_dlkm->UnMount(false, MNT_DETACH);
+	if (sys_dlkm)
+		sys_dlkm->UnMount(false, MNT_DETACH);
+
+#ifdef TW_INCLUDE_CRYPTO
+	if (sysroot)
+		sysroot->UnMount(false);
+#endif
+
+	if (modules_loaded == 0)
+		DataManager::SetValue("of_request_switch_control_mode", "1");
+
+	android::base::SetProperty(TW_MODULES_MOUNTED_PROP, "true");
+
+	return true;
+}
+
+int KernelModuleLoader::Try_And_Load_Modules(std::string module_dir, bool vendor_is_mounted) {
+	LOGINFO("Checking directory: %s\n", module_dir.c_str());
+	int modules_loaded = 0;
+	std::string dest_module_dir = "/tmp" + module_dir;
+	TWFunc::Recursive_Mkdir(dest_module_dir);
+	Copy_Modules_To_Tmpfs(module_dir);
+	if (!Write_Module_List(dest_module_dir))
+		return kernel_modules_requested.size();
+	if (!vendor_is_mounted && module_dir == "/vendor/lib/modules") {
+		module_dir = "/lib/modules";
+	}
+	LOGINFO("mounting %s on %s\n", dest_module_dir.c_str(), module_dir.c_str());
+	if (mount(dest_module_dir.c_str(), module_dir.c_str(), "", MS_BIND, NULL) == 0) {
+		Modprobe m({module_dir}, "modules.load.twrp", false);
+		m.LoadListedModules(false);
+		modules_loaded = m.GetModuleCount();
+		PartitionManager.UnMount_By_Path(module_dir.c_str(), false, MNT_DETACH);
+		LOGINFO("Modules Loaded: %d\n", modules_loaded);
+	}
+	LOGINFO("Loaded %d modules from %s\n", modules_loaded, module_dir.c_str());
+	return modules_loaded;
+}
+
+std::vector<std::string> KernelModuleLoader::Skip_Loaded_Kernel_Modules() {
+	std::vector<std::string> kernel_modules = kernel_modules_requested;
+	std::vector<std::string> loaded_modules;
+	std::string kernel_module_file = "/proc/modules";
+	if (TWFunc::read_file(kernel_module_file, loaded_modules) < 0)
+		LOGINFO("failed to get loaded kernel modules\n");
+	LOGINFO("number of modules loaded by init: %zu\n", loaded_modules.size());
+	if (loaded_modules.size() == 0)
+		return kernel_modules;
+	for (auto&& module_line : loaded_modules) {
+		auto module = TWFunc::Split_String(module_line, " ")[0];
+		std::string full_module_name = module + ".ko";
+		auto found = std::find(kernel_modules.begin(), kernel_modules.end(), full_module_name);
+		if (found != kernel_modules.end()) {
+			LOGINFO("found module to dedupe: %s\n", (*found).c_str());
+			kernel_modules.erase(found);
+		}
+	}
+	return kernel_modules;
+}
+
+bool KernelModuleLoader::Write_Module_List(std::string module_dir) {
+	DIR* d;
+	struct dirent* de;
+	std::vector<std::string> kernel_modules;
+	d = opendir(module_dir.c_str());
+	auto deduped_modules = Skip_Loaded_Kernel_Modules();
+	if (deduped_modules.size() == 0) {
+		LOGINFO("Requested modules are loaded\n");
+		return false;
+	}
+	if (d != nullptr) {
+		while ((de = readdir(d)) != nullptr) {
+			std::string kernel_module = de->d_name;
+			if (de->d_type == DT_REG) {
+				if (android::base::EndsWith(kernel_module, ".ko")) {
+					for (auto&& requested : kernel_modules_requested) {
+						if (kernel_module == requested) {
+							kernel_modules.push_back(kernel_module);
+							continue;
+						}
+					}
+					continue;
+				}
+			}
+		}
+		std::string module_file = module_dir + "/modules.load.twrp";
+		std::string module_list;
+		for (const auto& mod : kernel_modules) {
+			module_list += mod + "\n";
+		}
+		TWFunc::write_to_file(module_file, module_list);
+		closedir(d);
+	}
+	return true;
+}
+
+bool KernelModuleLoader::Copy_Modules_To_Tmpfs(std::string module_dir) {
+	std::string ramdisk_dir = "/tmp" + module_dir;
+	DIR* d;
+	struct dirent* de;
+	d = opendir(module_dir.c_str());
+	if (d != nullptr) {
+		while ((de = readdir(d)) != nullptr) {
+			std::string kernel_module = de->d_name;
+			if (de->d_type == DT_REG) {
+				std::string src = module_dir + "/" + de->d_name;
+				std::string dest = ramdisk_dir + "/" + de->d_name;
+				if (TWFunc::copy_file(src, dest, 0700, false) != 0) {
+					return false;
+				}
+			}
+		}
+		closedir(d);
+	} else {
+		LOGINFO("Unable to open module directory: %s. Skipping\n", module_dir.c_str());
+		return false;
+	}
+	return true;
+}

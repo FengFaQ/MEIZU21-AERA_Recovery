@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "generated": "2026-10-15",
+  "architecture": "aarch64",
+  "providers": [
+    {
+      "id": "kernelsu",
+      "name": "KernelSU",
+      "repository": "tiann/KernelSU",
+      "version": "v3.3.0",
+      "assets": [
+        {"kmi":"android14-6.1","name":"lkm-aarch64-android14-6.1_kernelsu.ko","size":386600,"sha256":"db47d831e5a61bc4ca1563915ac1c61cd40ceda7dc6c3d19a9572dfdce72d14c","archive":false},
+        {"kmi":"android15-6.6","name":"lkm-aarch64-android15-6.6_kernelsu.ko","size":315176,"sha256":"c31d994aaf285e7bf4cf1ec38c2bbf2d7f303d1a4a7d616405bcd9f850d684e5","archive":false},
+        {"kmi":"android16-6.12","name":"lkm-aarch64-android16-6.12_kernelsu.ko","size":386624,"sha256":"877286f81d500c4ec546c96e9718c186b7379573c97ba5d5a35dd9a91465d076","archive":false},
+        {"kmi":"android17-6.18","name":"lkm-aarch64-android17-6.18_kernelsu.ko","size":357304,"sha256":"adc743246822b3ea96c218425d4208aed2436805a73d2f3e8ed78cfa8602cadf","archive":false}
+      ]
+    },
+    {
+      "id": "kernelsu-next",
+      "name": "KernelSU Next",
+      "repository": "KernelSU-Next/KernelSU-Next",
+      "version": "v3.4.2",
+      "assets": [
+        {"kmi":"android14-6.1","name":"aarch64_android14-6.1_kernelsu.ko","size":541472,"sha256":"961d2ef0e135a71d2620f10ebdc6932ff5b43069c5cf7da595fba5ab666c4b72","archive":false},
+        {"kmi":"android15-6.6","name":"aarch64_android15-6.6_kernelsu.ko","size":435208,"sha256":"8d610b3070d4aa6fb116008c2e2caf4e3972aa73744d9106dc257a50e9bda66d","archive":false},
+        {"kmi":"android16-6.12","name":"aarch64_android16-6.12_kernelsu.ko","size":500656,"sha256":"67c5d9e9026c52ff4c9b2e681aa81d1884160282ecef71bfa72f53e7a8c211e7","archive":false},
+        {"kmi":"android17-6.18","name":"aarch64_android17-6.18_kernelsu.ko","size":473552,"sha256":"71931508be33ae4a0c24e5d727299835bea5add595020adf8e19b87fd223f593","archive":false}
+      ]
+    },
+    {
+      "id": "sukisu-ultra",
+      "name": "SukiSU Ultra",
+      "repository": "SukiSU-Ultra/SukiSU-Ultra",
+      "version": "v4.2.0",
+      "assets": [
+        {"kmi":"android14-6.1","name":"aarch64-android14-6.1-lkm.zip","size":107139,"sha256":"043cb8ed21fd16b1bd67769881d283cd9b45fb4811ad32985608fe11c21215cd","archive":true},
+        {"kmi":"android15-6.6","name":"aarch64-android15-6.6-lkm.zip","size":91847,"sha256":"ac6703e2639f41ddb069bc6ee3e7147b989f0d93e247a3360237e533997398bb","archive":true},
+        {"kmi":"android16-6.12","name":"aarch64-android16-6.12-lkm.zip","size":107275,"sha256":"faf8897e7e5f602cddaf872c7a8558bfd138a1bf6835611a7198a7c7ddddfdd4","archive":true},
+        {"kmi":"android17-6.18","name":"aarch64-android17-6.18-lkm.zip","size":100071,"sha256":"e5fb492efd6d5935b46b49efb3111562fb6e9cd489afa569a42f27080bf81bd9","archive":true}
+      ]
+    }
+  ]
+}

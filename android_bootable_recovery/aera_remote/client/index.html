@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0b0e12">
+<title>AERA Remote</title>
+<style>
+:root{color-scheme:dark;--accent:#23d4e7;--base:#080a0d;--panel:#15191f;--text:#f5f7fa;--muted:#929ba7}
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--base);color:var(--text);font-family:system-ui,sans-serif}
+body{background:radial-gradient(ellipse at top,#1b2630 0,#0b0e12 42%,#060709 100%)}
+.shell{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;padding:14px;gap:12px}
+.bar{display:flex;align-items:center;min-height:56px;padding:0 18px;border:1px solid #ffffff12;border-radius:20px;background:#171c22cc;backdrop-filter:blur(18px)}
+.a{font-size:22px;font-weight:900;color:var(--accent);margin-right:11px}.title{font-weight:750;letter-spacing:.12em}.state{margin-left:auto;color:var(--muted);font-size:13px}
+.stage{position:relative;min-height:0;overflow:hidden}.screen{position:absolute;inset:0;display:block;width:auto;height:auto;max-width:100%;max-height:100%;margin:auto;border-radius:22px;background:#050608;box-shadow:0 24px 70px #000c,0 0 0 1px #ffffff12;touch-action:none;user-select:none;cursor:crosshair}
+.actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.actions button{height:48px;border:1px solid #ffffff12;border-radius:16px;background:#171c22;color:var(--text);font:650 14px inherit}.actions button:last-child{background:var(--accent);color:#041013;border-color:transparent}
+.pair{position:fixed;inset:0;display:grid;place-items:center;padding:24px;background:#05070ae8;backdrop-filter:blur(18px)}.pair.hidden{display:none}.card{width:min(380px,100%);padding:28px;border:1px solid #ffffff16;border-radius:28px;background:#171b21;box-shadow:0 30px 90px #000d}.card h1{margin:0 0 8px}.card p{margin:0 0 18px;color:var(--muted);line-height:1.5}.card input,.card button{width:100%;height:50px;border-radius:15px;font:16px inherit}.card input{padding:0 16px;border:1px solid #ffffff18;background:#0b0e12;color:white;outline:none}.card button{margin-top:10px;border:0;background:var(--accent);color:#041013;font-weight:750}
+@media(max-width:560px){.shell{padding:7px;gap:7px}.bar{min-height:50px;border-radius:16px}.screen{border-radius:16px}.actions button{font-size:0}.actions button::first-letter{font-size:18px}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="bar"><span class="a">A</span><span class="title">AERA REMOTE</span><span class="state" id="state">Waiting</span></header>
+  <section class="stage"><img class="screen" id="screen" alt="Live AERA display" draggable="false"></section>
+  <nav class="actions"><button id="back">← Back</button><button id="home">⌂ Home</button><button id="full">⛶ Fullscreen</button><button id="retry">Reconnect</button></nav>
+</main>
+<section class="pair" id="pair"><form class="card" id="pairForm">
+  <h1>Pair with AERA</h1><p>Enter the eight-digit access code shown on the recovery screen.</p>
+  <input id="code" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="Access code">
+  <button>Connect</button>
+</form></section>
+<script>
+const screen=document.getElementById('screen'),state=document.getElementById('state'),pair=document.getElementById('pair');
+const initial=new URLSearchParams(location.search).get('code')||sessionStorage.getItem('aera-code')||'';
+let code=initial,shape={width:1,height:1},pressed=false,lastMove=0,queue=Promise.resolve();
+const url=path=>path+(path.includes('?')?'&':'?')+'code='+encodeURIComponent(code);
+async function call(path,options={}){const response=await fetch(url(path),{cache:'no-store',...options});if(!response.ok)throw new Error(response.status===401?'Wrong access code':'Connection failed');return response}
+async function connect(){if(!code){pair.classList.remove('hidden');return}state.textContent='Connecting…';try{shape=await(await call('/api/status')).json();pair.classList.add('hidden');state.textContent=`Live · ${shape.width}×${shape.height}`;screen.src=url('/stream.mjpeg?t='+Date.now())}catch(error){state.textContent=error.message;pair.classList.remove('hidden')}}
+function point(event){const box=screen.getBoundingClientRect();return{x:Math.max(0,Math.min(shape.width-1,Math.round((event.clientX-box.left)*shape.width/box.width))),y:Math.max(0,Math.min(shape.height-1,Math.round((event.clientY-box.top)*shape.height/box.height)))}}
+function touch(action,position={x:0,y:0}){queue=queue.then(()=>call('/api/input/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...position})})).catch(()=>{});return queue}
+function key(name){queue=queue.then(()=>call('/api/input/key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:name})})).catch(()=>{})}
+screen.onpointerdown=event=>{event.preventDefault();pressed=true;screen.setPointerCapture?.(event.pointerId);touch('down',point(event))};
+screen.onpointermove=event=>{if(!pressed)return;event.preventDefault();const now=performance.now();if(now-lastMove<22)return;lastMove=now;touch('move',point(event))};
+screen.onpointerup=event=>{if(!pressed)return;pressed=false;event.preventDefault();touch('move',point(event)).then(()=>touch('up'))};
+screen.onpointercancel=()=>{if(pressed){pressed=false;touch('up')}};screen.onerror=()=>{state.textContent='Stream interrupted';setTimeout(connect,800)};
+document.getElementById('back').onclick=()=>key('back');document.getElementById('home').onclick=()=>key('home');document.getElementById('retry').onclick=connect;document.getElementById('full').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+document.getElementById('pairForm').onsubmit=event=>{event.preventDefault();code=document.getElementById('code').value.trim();sessionStorage.setItem('aera-code',code);connect()};
+connect();
+</script>
+</body>
+</html>

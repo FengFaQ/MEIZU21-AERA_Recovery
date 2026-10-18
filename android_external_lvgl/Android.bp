@@ -1,0 +1,31 @@
+package {
+    default_applicable_licenses: ["lvgl_recovery_license"],
+}
+
+license {
+    name: "lvgl_recovery_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-MIT"],
+    license_text: ["LICENCE.txt"],
+}
+
+cc_library_static {
+    name: "liblvgl_recovery",
+    recovery_available: true,
+    srcs: ["src/**/*.c"],
+    shared_libs: ["libft2"],
+    export_include_dirs: [
+        ".",
+        "src",
+    ],
+    c_std: "gnu11",
+    cflags: [
+        "-DLV_CONF_INCLUDE_SIMPLE",
+        "-DLV_KCONFIG_IGNORE",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-Wno-unused-function",
+        "-Wno-unused-parameter",
+        "-Wno-missing-field-initializers",
+    ],
+}

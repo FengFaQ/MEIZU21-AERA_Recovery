@@ -1,0 +1,21 @@
+# Copyright (c) 2021 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+# Meizu 21 (m2461, SM8650) - ported from the verified TWRP recovery tree.
+# Started from /vendor/bin/start_crypto_services.sh (run by
+# init.recovery.qcom.rc on twrp.modules.loaded=true), which first points the
+# version properties at the installed system. The HAL reads them in its
+# constructor and hands them to the TA, so starting it any earlier binds the TA
+# to recovery's own values and decryption fails.
+#
+# Only the qti (non-SPU) KeyMint is started: system.prop sets
+# vendor.gatekeeper.is_security_level_spu=0, and AERA's keystore2 talks to
+# android.hardware.security.keymint.IKeyMintDevice/default, which this binary
+# publishes.
+service vendor.keymint-qti /vendor/bin/hw/android.hardware.security.keymint-service-qti
+    disabled
+    user root
+    group root drmrpc
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    seclabel u:r:recovery:s0

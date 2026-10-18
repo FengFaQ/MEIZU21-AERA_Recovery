@@ -1,0 +1,143 @@
+#!/system/bin/sh
+# MM GUI by fordownloads for AERA Recovery Project
+# Based on MM by VR25
+# Ver: 1.3
+# Args: mnt, status, unmnt
+
+# Default permissions
+umask 022
+
+mountPath=/magisk
+tmp=/tmp/mmgui
+
+is_mounted() { mountpoint -q "$1"; }
+
+ls_mount_path() { ls -1 $mountPath | grep -v 'lost+found'; }
+
+mount_image() {
+  e2fsck -fy $IMG &>/dev/null
+  if [ ! -d "$2" ]; then
+    mount -o remount,rw /
+    mkdir -p "$2"
+  fi
+  if (! is_mounted $2); then
+    loopDevice=
+    for LOOP in 0 1 2 3 4 5 6 7; do
+      if (! is_mounted $2); then
+        loopDevice=/dev/block/loop$LOOP
+        [ -f "$loopDevice" ] || mknod $loopDevice b 7 $LOOP 2>/dev/null
+        losetup $loopDevice $1
+        if [ "$?" -eq "0" ]; then
+          mount -t ext4 -o loop $loopDevice $2
+          is_mounted $2 || /system/bin/toolbox mount -t ext4 -o loop $loopDevice $2
+          is_mounted $2 || /system/bin/toybox mount -t ext4 -o loop $loopDevice $2
+        fi
+        is_mounted $2 && break
+      fi
+    done
+  fi
+  echo "$loopDevice" > /tmp/loopDevice
+  if ! is_mounted $mountPath; then
+    echo -e "\n(!) $IMG mount failed... abort\n"
+    exit 1
+  fi
+}
+
+mnt() {
+  echo "Mounting Magisk to $mountPath...";
+  
+  prop="/data/adb/magisk/util_functions.sh"
+  
+  if [ ! -f "$prop" ]; then
+	echo -e "\n(!) No Magisk installation found or installed version is not supported\n"
+	twrp xset ft_mm_found=0
+	exit 1
+  fi
+  
+  if mount | grep -qi /magisk; then
+	echo "Already mounted! Exiting w/o errors."
+	exit 0
+  fi
+  
+  mount /data 2>/dev/null
+  mount /cache 2>/dev/null
+  
+  MAG_19=0
+  
+  if [ -d /data/adb/magisk ] && [ -d /data/adb/modules ]; then
+	echo -e "\n* Magisk version is 19.x\n"
+	mountPath=/data/adb/modules
+	MAG_19=1
+  else
+	if [ ! -d /data/adb/magisk ] && [ ! -d /data/magisk ]; then
+		echo -e "\n(!) No Magisk installation found or installed version is not supported\n"
+		twrp xset ft_mm_found=0
+		exit 1
+	fi
+  fi
+  
+  [ -d $tmp ] && rm -rf $tmp
+  mkdir $tmp
+  
+  if [[ $MAG_19 == "0" ]]; then
+	[ -d /data/adb/magisk ] && IMG=/data/adb/magisk.img || IMG=/data/magisk.img
+	mount_image $IMG $mountPath
+  
+	if mount | grep -qi /magisk; then
+		echo "Success!"
+	else
+		echo "Error while mounting Magisk!"
+		twrp xset ft_mm_found=0
+		exit 1
+	fi
+  fi
+
+  for mod in $(ls_mount_path); do
+  	touch "$tmp/$mod"
+  done
+  
+  twrp xset ft_mm_found=1
+  twrp xset ft_mm_isnew=$MAG_19
+  twrp xset ft_mm_ver=$(cat "$prop" | grep "MAGISK_VER=" | cut -d'=' -f2 | sed "s/\""//g)
+}
+
+unmnt() {
+  echo "Unmounting Magisk...";
+  umount $mountPath
+  if [ -f /tmp/loopDevice ]; then
+	losetup -d $(cat /tmp/loopDevice)
+	rm -f /tmp/loopDevice
+  fi
+  rmdir $mountPath
+  [ -d $tmp ] && rm -rf $tmp
+}
+
+info() {
+  echo "MM GUI for AERA RP";
+  echo "by fordownloads";
+  echo "Thanks to VR25 @ xda-developers for MM Script";
+  echo "---";
+  echo "Args:";
+  echo "mnt - Mount Magisk to $mountPath";
+  echo "status - Show Magisk status";
+  echo "unmnt - Unmount Magisk";
+  echo "---";
+  status;
+}
+
+status() {
+  if mount | grep -qi /magisk; then
+	echo "Magisk mounted!";
+	exit 0;
+  else
+	echo "Magisk unmounted!";
+	exit 1;
+  fi;
+}
+
+case "$1" in
+	mnt ) mnt;;
+	status ) status;;
+	unmnt ) unmnt;;
+	* ) info;;
+esac

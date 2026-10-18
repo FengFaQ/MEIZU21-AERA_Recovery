@@ -1,0 +1,14 @@
+# Copyright (c) 2021 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+# Meizu 21 (m2461, SM8650) - ported from the verified TWRP recovery tree.
+# Started once qseecomd has registered its listeners; this HAL calls
+# QSEECom_start_app. se_omapi (built into AERA, /etc/init/se_omapi.rc) proxies to
+# it, and the Thales weaver and StrongBox transports reach the eSE that way.
+service vendor.secure_element /vendor/bin/hw/android.hardware.secure_element-service.qti
+    disabled
+    user root
+    group nfc root
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    seclabel u:r:recovery:s0

@@ -1,0 +1,77 @@
+package {
+    default_applicable_licenses: ["aera_netfs_license"],
+}
+
+license {
+    name: "aera_netfs_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-Apache-2.0",
+        "SPDX-license-identifier-BSD-3-Clause",
+        "SPDX-license-identifier-LGPL-2.1-or-later",
+    ],
+    license_text: [
+        "vendor/libsmb2/LICENCE-LGPL-2.1.txt",
+        "vendor/libsmb2/COPYING",
+        "vendor/libssh2/COPYING",
+    ],
+}
+
+cc_library_static {
+    name: "libaera_smb2",
+    recovery_available: true,
+    srcs: ["vendor/libsmb2/lib/*.c"],
+    exclude_srcs: ["vendor/libsmb2/lib/krb5-wrapper.c"],
+    local_include_dirs: ["vendor/libsmb2", "vendor/libsmb2/lib", "vendor/libsmb2/include", "vendor/libsmb2/include/smb2"],
+    export_include_dirs: ["vendor/libsmb2/include"],
+    cflags: ["-DHAVE_CONFIG_H", "-D_U_=__attribute__((unused))", "-Wno-error", "-Wno-unused-parameter", "-Wno-macro-redefined"],
+    stl: "none",
+}
+
+cc_library_static {
+    name: "libaera_ssh2",
+    recovery_available: true,
+    srcs: [
+        "vendor/libssh2/src/agent.c",
+        "vendor/libssh2/src/bcrypt_pbkdf.c",
+        "vendor/libssh2/src/channel.c",
+        "vendor/libssh2/src/comp.c",
+        "vendor/libssh2/src/chacha.c",
+        "vendor/libssh2/src/cipher-chachapoly.c",
+        "vendor/libssh2/src/crypt.c",
+        "vendor/libssh2/src/crypto.c",
+        "vendor/libssh2/src/global.c",
+        "vendor/libssh2/src/hostkey.c",
+        "vendor/libssh2/src/keepalive.c",
+        "vendor/libssh2/src/kex.c",
+        "vendor/libssh2/src/knownhost.c",
+        "vendor/libssh2/src/mac.c",
+        "vendor/libssh2/src/misc.c",
+        "vendor/libssh2/src/packet.c",
+        "vendor/libssh2/src/pem.c",
+        "vendor/libssh2/src/poly1305.c",
+        "vendor/libssh2/src/publickey.c",
+        "vendor/libssh2/src/scp.c",
+        "vendor/libssh2/src/session.c",
+        "vendor/libssh2/src/sftp.c",
+        "vendor/libssh2/src/transport.c",
+        "vendor/libssh2/src/userauth.c",
+        "vendor/libssh2/src/userauth_kbd_packet.c",
+        "vendor/libssh2/src/version.c",
+    ],
+    local_include_dirs: ["vendor/libssh2/src", "vendor/libssh2/include"],
+    export_include_dirs: ["vendor/libssh2/include"],
+    shared_libs: ["libcrypto"],
+    cflags: ["-DHAVE_CONFIG_H", "-DLIBSSH2_OPENSSL", "-Wno-error", "-Wno-unused-parameter"],
+    stl: "none",
+}
+
+cc_binary {
+    name: "aera-netfs",
+    recovery: true,
+    srcs: ["main.c", "smb.c", "sftp.c", "filesystem.c"],
+    static_libs: ["libaera_smb2", "libaera_ssh2", "libaera_fuse3", "libjson-c"],
+    shared_libs: ["libcrypto", "libdl"],
+    cflags: ["-D_FILE_OFFSET_BITS=64", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined"],
+    stl: "none",
+}

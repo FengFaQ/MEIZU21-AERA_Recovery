@@ -1,0 +1,1151 @@
+#!/system/bin/sh
+
+# ******************************************************
+# Description: 	Installer script for AERA Recovery
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2018-2026 The OrangeFox Recovery Project
+# Author: 	DarthJabba9, Ctapchuk
+# Date: 	TODAY
+# ******************************************************
+
+# last_modified
+MOD_DATE="20260415"
+
+# whether to print extra debug messages
+AERA_INSTALLER_DEBUG_MODE=0
+
+# if set, then trace the commands before executing them (verbose!)
+if [ "$AERA_INSTALLER_DEBUG_MODE" = "1" ]; then
+   set -o xtrace
+fi
+
+# the target device(s)
+TARGET_DEVICE="MAIN_DEVICE"
+TARGET_DEVICE_ALT=""
+
+# getprop
+GETPROP=$(which getprop)
+if [ -z "$GETPROP" ]; then
+   GETPROP=/system/bin/getprop
+   [ ! -e "$GETPROP" ] && GETPROP=/sbin/getprop
+   [ ! -e "$GETPROP" ] && GETPROP=$(which resetprop)
+fi
+
+# the current device's codename
+PRODUCT_DEVICE=$($GETPROP "ro.product.device")
+
+# root of dev block partitions
+DEV_BLOCK_ROOT=/dev/block/by-name
+
+# target partition
+RECOVERY_PARTITION=$DEV_BLOCK_ROOT/recovery
+
+# boot partition
+BOOT_PARTITION=$DEV_BLOCK_ROOT/boot
+
+# default system mount point
+SYSTEM_PARTITION=$DEV_BLOCK_ROOT/system
+
+# default vendor mount point
+VENDOR_PARTITION=$DEV_BLOCK_ROOT/vendor
+
+# default vendor_boot mount point
+VENDOR_BOOT_PARTITION="$DEV_BLOCK_ROOT/vendor_boot"
+
+# default persist partition
+PERSIST_PARTITION=$DEV_BLOCK_ROOT/persist
+
+# the display screen
+SCREEN=/proc/self/fd/$2
+
+# the current zip installer
+ZIPFILE="$3"
+
+# AERA Recovery understands a richer installer protocol. Keep this standard
+# update-binary fully functional for every other recovery, but hand the same
+# generated package configuration to the dedicated AERA entry when available.
+AERA_INSTALLER_ENTRY="META-INF/com/google/android/aera-installer"
+AERA_INSTALLER_PATH="/tmp/aera-installer-entry.$$"
+if [ "$AERA_INSTALLER_NATIVE" != "1" ] && \
+   [ "$($GETPROP ro.aera.build 2>/dev/null)" = "aera" ] && \
+   unzip -l "$ZIPFILE" "$AERA_INSTALLER_ENTRY" 2>/dev/null | \
+     grep -Fq "$AERA_INSTALLER_ENTRY"; then
+   if unzip -p "$ZIPFILE" "$AERA_INSTALLER_ENTRY" > \
+        "$AERA_INSTALLER_PATH" 2>/dev/null; then
+      chmod 0755 "$AERA_INSTALLER_PATH"
+      AERA_INSTALLER_NATIVE=1
+      export AERA_INSTALLER_NATIVE
+      exec "$AERA_INSTALLER_PATH" "$@"
+   fi
+   rm -f "$AERA_INSTALLER_PATH"
+fi
+
+# detect Magisk app/ROM flashing
+BOOTMODE=false
+ps | grep zygote | grep -v grep >/dev/null && BOOTMODE=true
+$BOOTMODE || ps -A 2>/dev/null | grep zygote | grep -v grep >/dev/null && BOOTMODE=true
+
+# temp directory
+$BOOTMODE && TMP_DIR=/dev/tmp || TMP_DIR=/tmp
+mkdir -p $TMP_DIR
+
+# the zip extract directory
+EX_DIR=$TMP_DIR/ofox_installer
+
+# global error code (0=good; 1=error)
+ERROR_CODE=0
+
+# AB device?
+AERA_AB_DEVICE=0
+
+# vAB device?
+AERA_VIRTUAL_AB_DEVICE=0
+
+# vendor_boot recovery?
+AERA_VENDOR_BOOT_RECOVERY=0
+
+# vendor_boot - whether to flash only the ramdisk
+AERA_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL=0
+
+# vendor_boot recovery with V3 header?
+AERA_VENDOR_BOOT_RECOVERY_V3_HDR=0
+
+# enable vbmeta patching for magiskboot 24+ ?
+AERA_PATCH_VBMETA_FLAG=0
+
+# Reset AERA settings to default?
+AERA_RESET_SETTINGS="1"
+
+# build a vanilla version that skips all AERA patches?
+AERA_VANILLA_BUILD=0
+
+# whether we have been given a fixed AERA stuff directory
+AERA_MISCELLANEOUS_ROOT_DIRECTORY=""
+
+# whether we've been given a new settings root
+AERA_SETTINGS_ROOT_DIRECTORY=""
+
+# whether to disable auto-reboot after installing AERA
+AERA_INSTALLER_DISABLE_AUTOREBOOT=0
+
+# whether we have an A/B device with dedicated recovery partitions
+AERA_AB_DEVICE_WITH_RECOVERY_PARTITION=0
+
+# sundry glodal defaults
+# VEND_DIR="/vendor"
+# SYS_DIR="/system"
+VEND_DIR="/mnt/vendor"
+SYS_DIR="/mnt/system"
+SYS_ROOT="$SYS_DIR"
+ETC_DIR="$SYS_DIR/etc"
+SAR="0"
+
+BUSYBOX=$(which busybox)
+if [ -z "$BUSYBOX" ]; then
+   BUSYBOX=/system/bin/busybox
+   [ ! -e "$BUSYBOX" ] && BUSYBOX=/sbin/busybox
+fi
+
+TOYBOX=$(which toybox)
+if [ -z "$TOYBOX" ]; then
+   TOYBOX=/system/bin/toybox
+   [ ! -e "$TOYBOX" ] && TOYBOX=/sbin/toybox
+fi
+
+FLASH_IMAGE=$(which flash_image)
+if [ -z "$FLASH_IMAGE" ]; then
+   FLASH_IMAGE=/system/bin/flash_image
+   [ ! -e "$FLASH_IMAGE" ] && FLASH_IMAGE=/sbin/flash_image
+fi
+
+ERASE_IMAGE=$(which erase_image)
+if [ -z "$ERASE_IMAGE" ]; then
+   ERASE_IMAGE=/system/bin/erase_image
+   [ ! -e "$ERASE_IMAGE" ] && ERASE_IMAGE=/sbin/erase_image
+fi
+
+# ui_print "<message>" ["<message 2>" ...]
+ui_print() {
+  if [ "$BOOTMODE" = "true" ]; then
+	echo "$1"
+  else
+	until [ ! "$1" ]; do
+		echo -e "ui_print $1\nui_print" >> $SCREEN
+		shift
+	done
+  fi
+}
+
+# Native AERA installer messages are deliberately silent on the compatibility
+# path, so older recoveries only receive commands they already understand.
+aera_emit() {
+   [ "$AERA_INSTALLER_NATIVE" = "1" ] || return 0
+   echo "$1" >> $SCREEN
+}
+
+aera_package() {
+   aera_emit "aera_package $1|$2|$3|$4"
+}
+
+aera_stage() {
+   aera_emit "aera_stage $1|$2|$3|$4|$5"
+}
+
+aera_status() {
+   aera_emit "aera_status $1"
+}
+
+aera_complete() {
+   aera_emit "aera_complete $1|$2"
+}
+
+aera_reboot() {
+   aera_emit "aera_reboot $1|$2"
+}
+
+# abort [<message>]
+abort() {
+   aera_status "$*"
+   ui_print "$*"
+   ERROR_CODE=1
+   rm -rf $EX_DIR
+   exit 1
+}
+
+#
+find_persist() {
+local P=/persist
+  [ -d $P -o "$BOOTMODE" != "true" ] && { echo $P; return; }
+
+  P=/mnt/vendor/persist
+  [ -d $P ] && { echo $P; return; }
+
+  P=$TMP_DIR/persist
+  if [ -e $PERSIST_PARTITION ]; then
+     mkdir -p $P
+     mount $PERSIST_PARTITION $P
+     [ $? = 0 ] && { echo $P; return; }
+  fi
+  echo "ERROR"
+}
+
+# is_mounted <partition>
+is_mounted() {
+  case `mount` in
+    *" $1 "*) echo 1;;
+    *) echo 0;;
+  esac;
+}
+
+# mount a partition, if not mounted already
+# mount_part <partition>
+mount_part() {
+  if [ -z "$1" ]; then
+     return
+  fi
+
+  local F=$(is_mounted "$1")
+  if [ "$F" = "1" ]; then
+     return
+  fi
+
+  mount $1
+}
+
+# unmount a partition, if mounted
+# umount_part <partition>
+umount_part() {
+  if [ -z "$1" ]; then
+     return
+  fi
+
+  local F=$(is_mounted "$1")
+  if [ "$F" = "1" ]; then
+     umount "$1" > /dev/null 2>&1
+  fi
+}
+
+# package_extract_file <file> <destination_file>
+old_package_extract_file() {
+   mkdir -p "$(dirname "$2")"
+   unzip -o "$ZIPFILE" "$1" -p > "$2"
+}
+
+# package_extract_dir <dir> <destination_dir>
+old_package_extract_dir() {
+  for entry in $(unzip -l "$ZIPFILE" "$1/*" 2>/dev/null | tail -n+4 | grep -o " $1.*$" | cut -c2-); do
+    outfile=$(echo "$entry" | sed "s|${1}|${2}|")
+    mkdir -p "$(dirname "$outfile")"
+    unzip -o "$ZIPFILE" "$entry" -p > "$outfile"
+  done;
+}
+
+package_extract_dir() {
+   if [ -d $EX_DIR/$1 ]; then
+      cp -a $EX_DIR/$1/* $2
+   else
+      ui_print "Invalid directory: $1"
+   fi
+}
+
+package_extract_file() {
+   if [ -e $EX_DIR/$1 ]; then
+      dd if=$EX_DIR/$1 of=$2
+   else
+      ui_print "Invalid file: $1"
+   fi
+}
+
+# file_getprop <file> <property>
+file_getprop() {
+  grep -m1 "^$2=" "$1" | cut -d= -f2
+}
+
+# xgetprop <property>
+xgetprop() {
+   [ -e $GETPROP ] && $GETPROP $1 || grep -m1 "^$1=" /default.prop | head -n1 | cut -d= -f2
+}
+
+# avoid the standalone BSD grep, which segfaults on "grep -w"
+find_grep() {
+local GREP=$(which grep)
+local F=/prop.default
+
+   if [ ! -e $F ]; then
+      F=/default.prop
+      [ ! -e $F ] && F=/tmp/recovery.log
+   fi
+
+   if [ ! -L $GREP ]; then
+     GREP=""
+     if [ -x $BUSYBOX ]; then
+        GREP="$BUSYBOX grep"
+	$GREP -q build $F > /dev/null 2>&1 || GREP=""
+     fi
+
+     if [ -z "$GREP" -a -x $TOYBOX ]; then
+        GREP="$TOYBOX grep"
+        $GREP -q build $F > /dev/null 2>&1 || GREP=""
+     fi
+
+     [ -z "$GREP" ] && GREP=/system/bin/grep
+   fi
+
+ echo "$GREP"
+}
+
+# check if we have specified a target device and whether this is it
+CheckRequirements() {
+   local GREP=$(find_grep)
+   local F=$(echo "$PRODUCT_DEVICE" | $GREP -w "$TARGET_DEVICE")
+   if [ -n "$F" ]; then
+       ui_print "- AERA (RELEASE_VER) for $TARGET_DEVICE ..."
+   else
+       if [ -z "$TARGET_DEVICE_ALT" ]; then
+          abort "E3004: This package is for $TARGET_DEVICE. This device ($PRODUCT_DEVICE) is not supported."
+       fi
+       F=$(echo "$TARGET_DEVICE_ALT" | $GREP -w "$PRODUCT_DEVICE")
+       if [ -n "$F" ]; then
+          ui_print "- AERA (RELEASE_VER) for $PRODUCT_DEVICE ..."
+       else
+          abort "E3004: This package is for $TARGET_DEVICE. This device ($PRODUCT_DEVICE) is not supported."
+       fi
+   fi
+}
+
+# do we have a virtual A/B device?
+is_VAB() {
+	if [ "$AERA_VIRTUAL_AB_DEVICE" = "1" -o "$($GETPROP ro.aera.virtual_ab)" = "1" -o "$($GETPROP ro.virtual_ab.enabled)" = "true" ]; then
+		echo "1"
+	else
+		echo "0"
+	fi
+}
+
+# do we have a SAR build?
+is_SAR() {
+  local F=$($GETPROP "ro.build.system_root_image")
+  [ "$F" = "true" ] && {
+    echo "1"
+    return
+  }
+
+  F=$($GETPROP "ro.boot.dynamic_partitions")
+  [ "$F" = "true" ] && {
+    echo "1"
+    return
+  }
+
+  F=$($GETPROP "ro.aera.sar")
+  [ "$F" = "1" ] && {
+    echo "1"
+    return
+  }
+
+  F=$(grep -s "/system_root" "/etc/fstab")
+  [ -n "$F" ] && {
+     echo "1"
+     return
+  }
+
+  [ -L "/system" -a -d "/system_root" ] && {
+    echo "1"
+    return
+  }
+
+  F=$(grep -s "/system_root" "/proc/mounts")
+  [ -n "$F" ] && {
+     echo "1"
+     return
+  }
+
+  F=$($GETPROP ro.twrp.sar)
+  [ "$F" = "true" ] && echo "1" || echo "0"
+}
+
+# file/directory/block exists
+Exists() {
+  [ -z "$1" ] && { echo "0"; return; } # error
+  [ -d "$1" ] && { echo "1"; return; } # directory
+  [ -f "$1" ] && { echo "2"; return; } # file
+  [ -h "$1" ] && { echo "3"; return; } # link
+  [ -e "$1" ] && { echo "4"; return; } # other kind of file
+  stat "$1" > /dev/null 2>&1;
+  [ "$?" = "0" ] && echo "5" || echo "0"; # 5 = what kind of file is this?
+}
+
+# mount everything we might need
+MountThemAll() {
+local sys="/mnt/system"
+
+	mkdir -p $SYS_DIR
+	mkdir -p $VEND_DIR
+
+	# /system
+	SAR=$(is_SAR)
+	[ "$SAR" = "1" ] && sys="/system_root"
+	SYS_DIR="$sys"
+	SYS_ROOT="$SYS_DIR"
+	local F=$(is_mounted "$sys")
+	if [ "$F" = "0" ]; then
+	   mount "$sys" > /dev/null 2>&1
+	   F=$(is_mounted "$sys")
+	   [ "$F" = "0" ] && mount -t ext4 $SYSTEM_PARTITION "$sys"
+
+	   # system-as-root stuff
+	   [ -d "$sys/system" ] && SYS_DIR="$sys/system"
+	   [ -d "$sys/system/etc" ] && ETC_DIR="$sys/system/etc"
+	fi
+
+	# /vendor
+	F=$(is_mounted "$VEND_DIR")
+	if [ "$F" = "0" ]; then
+	   mount "$VEND_DIR" > /dev/null 2>&1
+	   F=$(is_mounted "$VEND_DIR")
+	   [ "$F" = "0" ] && mount -t ext4 $VENDOR_PARTITION $VEND_DIR > /dev/null 2>&1
+	fi
+}
+
+# unmount everything that we mounted
+UnMountThemAll() {
+   umount_part "$SYS_ROOT"
+   umount_part "$SYS_DIR" > /dev/null 2>&1
+   umount_part "$VEND_DIR"
+   umount_part "/cache"
+   umount_part "$PERSIST_PATH"
+   umount_part "/data"
+}
+
+Process_StockRecovery() {
+local RF=$1
+   # ui_print "- File: [$RF]"
+   if [ -f $RF ]; then
+      ui_print "- Processing file: $RF"
+      cp -af $RF $RF.bak
+      rm -f $RF
+   fi
+}
+
+Disable_stock_recovery_overwrites() {
+local ToRename="$SYS_DIR/bin/install-recovery.sh
+$ETC_DIR/install-recovery.sh
+$ETC_DIR/recovery-resource.dat
+$SYS_ROOT/recovery-from-boot.p
+$SYS_DIR/recovery-from-boot.p
+$SYS_DIR/vendor/bin/install-recovery.sh
+$SYS_DIR/vendor/etc/install-recovery.sh
+$SYS_DIR/vendor/etc/recovery-resource.dat
+$SYS_DIR/vendor/recovery-from-boot.p
+$VEND_DIR/recovery-from-boot.p
+$VEND_DIR/bin/install-recovery.sh
+$VEND_DIR/etc/install-recovery.sh
+$VEND_DIR/etc/recovery-resource.dat"
+
+   for i in $ToRename
+   do
+     Process_StockRecovery "$i"
+   done
+}
+
+# Whether this is really a proper A/B device
+Is_AB_Device() {
+local S=$($GETPROP "ro.boot.slot_suffix")
+local U=$($GETPROP "ro.build.ab_update")
+   if [ -n "$S" -a "$U" = "true" ]; then
+      echo "1"
+   else
+      echo "0"
+   fi
+}
+
+# get the cache dir
+GetCacheDir() {
+local C="/cache/"
+local AB="/data/cache/"
+local D="/data/"
+
+  if [ "$AERA_AB_DEVICE" = "1" -o "$(Is_AB_Device)" = "1" ]; then
+     [ -d $AB ] && { echo "$AB"; return; }
+     mount_part "/data" > /dev/null 2>&1
+     mkdir -p $AB > /dev/null 2>&1
+     [ -d $AB ] && { echo "$AB"; return; }
+  fi
+
+ [ -d $C ] && {
+    [ "$BOOTMODE" = "true" ] && { echo "$C"; return; }
+    local F=$(cat /etc/fstab | grep "/cache")
+    [ -n "$F" ] && { echo "$C"; return; }
+ }
+
+ [ -d $AB ] && { echo "$AB"; return; }
+ [ -d $D ] && {
+    mount_part "/data" > /dev/null 2>&1
+    mkdir -p $AB > /dev/null 2>&1
+    [ -d $AB ] && { echo "$AB"; return; }
+  }
+
+ echo "$C"
+}
+
+# log this install
+LogFreshInstall() {
+local cache_dir=$(GetCacheDir)
+local F="0"
+
+  if [ "$cache_dir" = "/cache/" ]; then
+     mount_part "/cache"
+     F=$(is_mounted "/cache")
+     [ "$F" != "1" ] && {
+       ui_print "- Error mounting /cache; the post-install patches will not be processed."
+       return
+     }
+ else
+     if [ "$cache_dir" = "/persist/cache/" -o "$cache_dir" = "/persist/" ]; then
+	mount_part "/persist"
+	F=$(is_mounted "/persist")
+	[ "$F" != "1" ] && {
+	  ui_print "- Error mounting the cache directory ($cache_dir); the post-install patches will not be processed."
+	  return
+	}
+     fi
+ fi
+
+ if [ "$AERA_AB_DEVICE" = "1" -o "$(Is_AB_Device)" = "1" ]; then
+    ui_print "- A/B device: the post-install patches will not be processed."
+    return
+ fi
+
+ F="$cache_dir"recovery/
+ [ ! -d $F ] && mkdir -p $F
+ ui_print "- AERA fresh installation - "$F"Fox_Installed"
+ echo "AERA_NEW=1" > "$F"Fox_Installed
+
+ [ ! -f "$F"Fox_Installed ] && {
+    ui_print "- Error writing to the cache directory ($cache_dir); the post-install patches will not be processed."
+    return
+ }
+
+ if [ "$BOOTMODE" = "true" ]; then
+    [ "$AERA_RESET_SETTINGS" != "disabled" ] && echo "BOOTMODE=1" >> "$F"Fox_Installed
+ fi
+}
+
+# unzip the installer package into /tmp
+Unzip_Installer_Package() {
+   mkdir -p $TMP_DIR
+   cd $TMP_DIR
+   rm -rf $EX_DIR
+   mkdir -p $EX_DIR
+   cd $EX_DIR
+   unzip -o "$ZIPFILE"
+}
+
+# print the size of a file
+FileSize() {
+  if [ -f $1 ]; then
+     set -- $(ls -l "$1"); echo "$5"
+     # stat -c %s "$1"
+  else
+     echo "0"
+  fi
+}
+
+# test the magiskboot binary for "--vendor" switch support
+is_vendor_boot_magiskboot() {
+local tool=$1
+local tmp=$TMP_DIR/tmp_mboot.txt
+
+	[ -z "$tool" -o ! -e "$tool" ] && { echo 0; return; }
+	$tool &> $tmp
+	local gr=$(grep "\-\-vendor" $tmp)
+	rm -f $tmp
+	[ -n "$gr" ] && echo 1 || echo 0
+}
+
+# routine for flashing on A/B devices (credits: osm0sis)
+# argument: "0" (if there is no recovery partition); or recovery partition size (if there is one)
+AB_Install_Recovery() {
+local part_size="$1"
+local tool="$EX_DIR"/magiskboot
+local target="$EX_DIR"/boot.img
+local slot
+local name
+local tmp
+local PART
+local F_RAM
+
+	cd "$EX_DIR"
+
+	# various searches for magiskboot in the live recovery session
+	if [ ! -e "$tool" ]; then
+	   tool=/system/bin/magiskboot
+	   if [ ! -e "$tool" ]; then
+	      tool=/sbin/magiskboot
+	      [ ! -e "$tool" ] && tool=/AERA/Files/magiskboot_new
+	      [ ! -e "$tool" ] && tool=$(which magiskboot)
+	   fi
+	   [ -z "$tool" ] && abort "- I cannot find magiskboot. Quitting!"
+	fi
+
+	chmod 0755 "$tool"
+
+	# recovery.img must be in the zip installer
+	if [ ! -f "recovery.img" ]; then
+	   abort "- I cannot find the AERA recovery image. Quitting!"
+	fi
+
+	# target partition without the slot suffix
+	[ -z "$part_size" ] && part_size="0"
+	if [ "$part_size" != "0" -a -e $RECOVERY_PARTITION"_b" ]; then
+	    target="$RECOVERY_PARTITION"
+	    name="recovery"
+	    AERA_AB_DEVICE_WITH_RECOVERY_PARTITION=1
+	else
+	    if [ "$AERA_VENDOR_BOOT_RECOVERY" = "1" ]; then # vendor_boot bringup
+	    	ui_print "- Vendor_boot device ..."
+	    	target="$VENDOR_BOOT_PARTITION"
+	    	name="vendor_boot"
+	    else
+		if [ "$(is_VAB)" = "1" ]; then
+			ui_print "- Virtual A/B device ..."
+		else
+			ui_print "- Standard A/B device ..."
+		fi
+	    	target="$BOOT_PARTITION"
+	    	name="boot"
+	    fi
+	fi
+
+	# if we have a recovery  partition - install the recovery image to recovery _a /_b
+	if [ "$name" = "recovery" ]; then
+	   ui_print "- A/B device - a recovery partition exists"
+
+	   # check against partition size - again
+	   tmp=$($GETPROP "ro.boot.slot_suffix")
+	   part_size=$(blockdev --getsize64 $target"$tmp") > /dev/null 2>&1
+	   local rec_size=$(FileSize "recovery.img")
+	   [ $rec_size -gt $part_size ] && abort "The recovery image ($rec_size bytes) is bigger than your recovery partition ($part_size bytes)! Quitting."
+
+	   # if we get here, it is safe to flash the image to the recovery _a /_b slots
+	   ui_print "- The active slot is $tmp ..."
+	   for slot in _a _b; do
+		ui_print "- Installing AERA to slot $slot..."
+		PART=$target"$slot"
+		blockdev --setrw $PART
+		package_extract_file "recovery.img" "$PART"
+	   done
+	   return
+	fi
+
+# vendor_boot as recovery - flash both slots and return
+	if [ "$AERA_VENDOR_BOOT_RECOVERY" = "1" ]; then
+	   ui_print "- NOTE: vendor_boot-as-recovery is highly experimental! Do not use unless you are absolutely sure that it will not cause problems!"
+
+	   # replace the entire vendor_boot partition ?
+	   local no_ramdisk_only=0
+	   [ "$AERA_INSTALLER_VENDOR_BOOT_RAMDISK_INSTALL" != "1" ] && no_ramdisk_only=1
+
+	   if [ "$no_ramdisk_only" != "1" ]; then
+		tmp=$($GETPROP "aera.vendor_boot.recovery")
+		if [ "$tmp" != "true" ]; then
+			ui_print "- Warning: you are not running a vendor_boot AERA recovery!";
+			ui_print "- Caution: this may be a problem (or maybe not!)";
+			#no_ramdisk_only=1
+		fi
+	   fi
+
+	   # so, are we able to flash the ramdisk only?
+	   if [ "$no_ramdisk_only" != "1" ]; then
+	   	ui_print "- Installing only the ramdisk..."
+	   else
+	   	for slot in _a _b; do
+			ui_print "- Installing AERA to $name$slot..."
+			PART=$target"$slot"
+			blockdev --setrw $PART
+			package_extract_file "recovery.img" "$PART"
+	   	done
+	   	return
+	   fi
+
+	   #----- AERA can replace just the vendor_boot recovery ramdisk -------
+	   F_RAM=vendor_ramdisk_recovery.cpio
+	   [ ! -f $F_RAM ] && F_RAM=ramdisk.cpio
+	   #[ "$AERA_VENDOR_BOOT_RECOVERY_V3_HDR" = "1" -a ! -f $F_RAM ] && F_RAM=ramdisk.cpio
+
+	   # rename the AERA installer's ramdisk image to "fox_vendor_ramdisk"
+	   ui_print "- Backing up the AERA ramdisk image..."
+	   mv -f $F_RAM fox_vendor_ramdisk || abort "- I cannot backup the ramdisk image."
+
+	   # dump the vendor_boot partition and unpack
+	   slot=$($GETPROP "ro.boot.slot_suffix")
+	   ui_print "- Fetching the $target$slot image..."
+	   dd bs=1048576 if=$target$slot of=$name".img" || abort "- I cannot dump the $name$slot image."
+
+	   # unpack
+	   ui_print "- Unpacking the $target$slot image..."
+	   "$tool" unpack -n $name".img"
+	   # after unpacking, there should be - either: ./ramdisk.cpio (v3 header); or ./vendor_ramdisk_recovery.cpio (v4 header + old magiskboot); or vendor_ramdisk/recovery.cpio (v4 header + magiskboot 28.0 and higher)
+	   if [ -e "./ramdisk.cpio" -o -e "./vendor_ramdisk_recovery.cpio" -o -e "./vendor_ramdisk/recovery.cpio" ]; then
+		ui_print "- Finished unpacking the $target$slot image."
+	   else
+		abort "- I cannot unpack the $name$slot image."
+	   fi
+
+	   # check for magiskboot v28+ operations
+	   if [ ! -f $F_RAM -a -f "vendor_ramdisk/recovery.cpio" ]; then
+		F_RAM="vendor_ramdisk/recovery.cpio"
+	   fi
+
+	   # replace the vendor_boot ramdisk with our own
+	   cp -f fox_vendor_ramdisk $F_RAM  || abort "- I cannot copy the ramdisk image."
+
+	   # repack
+	   ui_print "- Repacking the ROM's $name$slot image..."
+	   "$tool" repack $name".img" new_recovery.img || abort "- I cannot repack the $name$slot image."
+
+	   # flash both slots
+	   for slot in _a _b; do
+		ui_print "- Installing AERA to $name$slot..."
+		PART=$target"$slot"
+		blockdev --setrw $PART
+		package_extract_file "new_recovery.img" "$PART"
+	   done
+
+	   "$tool" cleanup
+	   rm -f $name".img"
+	   rm -f "new_recovery.img"
+	   mv -f fox_vendor_ramdisk $F_RAM
+	   return
+	   # -----------------------------------------------------
+	fi
+# end: vendor_boot-as-recovery
+
+	# enable the magiskboot 24+ vbmeta patch?
+	if [ "$AERA_PATCH_VBMETA_FLAG" = "1" ]; then
+	   export PATCHVBMETAFLAG=true
+	else
+	   export PATCHVBMETAFLAG=false
+	fi
+
+	# extract the ramdisk from the AERA image
+	chmod 0755 "$tool"
+	ui_print "- Extracting the AERA ramdisk ..."
+	"$tool" unpack recovery.img || abort "- I cannot extract the AERA ramdisk. Quitting!"
+
+	# deal with ramdisk cpio
+	if [ ! -f "ramdisk.cpio" ]; then
+	   abort "- Error extracting the AERA ramdisk. Quitting!"
+	fi
+	cp -f ramdisk.cpio ramdisk-ofrp.cpio
+	rm -f ramdisk.cpio
+	rm -f kernel dtb kernel_dtb
+
+	# deal with both slots
+	for slot in _a _b; do
+		ui_print "- Running boot image patcher on slot $name$slot..."
+
+		# dump the partition and unpack
+		dd bs=1048576 if=$target$slot of=boot.img || abort "- I cannot dump the $name$slot image."
+		"$tool" unpack -h boot.img || abort "- I cannot unpack the $name$slot image."
+
+		# kernel string want_initramfs -> skip_initramfs (Magisk)
+		"$tool" hexpatch kernel 77616E745F696E697472616D6673 736B69705F696E697472616D6673
+
+		# kernel string trip_initramfs -> skip_initramfs (SuperSU)
+		"$tool" hexpatch kernel 747269705F696E697472616D6673 736B69705F696E697472616D6673
+
+		# boot.img header cmdline remove skip_override (flar2 patch)
+		sed -i "s|$(grep '^cmdline=' header | cut -d= -f2-)|$(grep '^cmdline=' header | cut -d= -f2- | sed -e 's/skip_override//' -e 's/  */ /g' -e 's/[ \t]*$//')|" header
+
+		cp -f ramdisk-ofrp.cpio ramdisk.cpio
+		"$tool" repack boot.img || abort "- I cannot repack the $name$slot image!"
+
+		blockdev --setrw $target$slot
+		cat new-boot.img /dev/zero > $target$slot 2>/dev/null || true
+		rm -f boot.img dtb kernel new-boot.img ramdisk.cpio header
+		"$tool" cleanup
+	done
+
+	# tidy up
+	rm -f ramdisk-ofrp.cpio boot.img new-boot.img
+	"$tool" cleanup
+
+	cd $TMP_DIR
+	if [ "$name" = "boot" ]; then
+	   ui_print " "
+	   ui_print "*** NOTE: You are now unrooted! ***"
+	   ui_print " "
+	   ui_print " "
+	fi
+}
+
+# install the recovery
+Install_Recovery() {
+local ttmp=$PART
+local Is_ABD="0"
+local PART=$(readlink $RECOVERY_PARTITION)
+
+    [ "$?" != "0" ] && PART=$RECOVERY_PARTITION
+
+    # either we've been told that it is A/B, or, it really is A/B
+    [ "$AERA_AB_DEVICE" = "1" -o "$(Is_AB_Device)" = "1" ] && Is_ABD="1"
+    [ "$Is_ABD" = "1" ] && {
+       ui_print "- The device is an A/B device."
+
+       # verify that there is no recovery partition, else get its size
+       ttmp=$(blockdev --getsize64 $RECOVERY_PARTITION"_b") > /dev/null 2>&1
+       [ $? == 0 ] && ui_print "- But it also has a recovery partition!" || ttmp=0
+       AB_Install_Recovery "$ttmp"
+       return
+    }
+
+    # get the size of the recovery partition
+    oldF=$(blockdev --getsize64 $PART) > /dev/null 2>&1
+
+    # get the size of the recovery image
+    local newF=$(FileSize recovery.img)
+    ui_print "- Partition_Size=$oldF bytes; Recovery_Size=$newF bytes"
+    [ $newF -gt $oldF ] && {
+      abort "The recovery image ($newF bytes) is bigger than your recovery partition ($oldF bytes)! Quitting."
+    }
+
+    if [ -x "$FLASH_IMAGE" ] && [ -x "$ERASE_IMAGE" ]; then
+       ui_print "- Cleaning the recovery partition ($PART)"
+       $ERASE_IMAGE "$PART"
+       [ $? == 0 ] && ui_print "- Succeeded." || ui_print "- Failed."
+
+       ui_print "- Flashing AERA recovery..."
+       $FLASH_IMAGE "$PART" "$EX_DIR/recovery.img"
+       [ $? == 0 ] && ui_print "- Succeeded." || {
+	   ui_print "- Problems encountered. Trying an alternative flashing method..."
+	   package_extract_file "recovery.img" "$PART"
+	   [ $? == 0 ] && ui_print "- Succeeded." || {
+	      ui_print "- Flashing failed. Trying to restore original recovery..."
+	      $FLASH_IMAGE "$PART" "$bak"
+	      [ $? == 0 ] && ui_print "- Succeeded." || abort "- Failed! There is now no recovery! Flash a working recovery via fastboot."
+	   }
+       }
+    else
+         ui_print "- Flashing the new recovery."
+         package_extract_file "recovery.img" "$PART"
+    fi
+    rm -f $bak
+    return
+}
+
+# reset settings to default
+Reset_Settings() {
+local AERA_HOME=$($GETPROP "ro.aera.home")
+local AERA_SETTINGS=$($GETPROP "ro.aera.settings")
+	[ -z "$AERA_HOME" ] && AERA_HOME=/sdcard/AERA
+	[ -z "$AERA_SETTINGS" ] && AERA_SETTINGS=/sdcard/AERA
+
+	ui_print "- Removing any old AERA configuration files ..."
+	rm -rf $AERA_HOME/.bin.
+	rm -f $AERA_HOME/.bash*
+	rm -f $AERA_HOME/aera*
+	rm -rf $AERA_SETTINGS/.theme
+	rm -rf $AERA_SETTINGS/.navbar
+	rm -f $AERA_SETTINGS/.aera*
+
+	if [ "$PERSIST_PATH" != "ERROR" -a -d $PERSIST_PATH ]; then
+	   	[ "$BOOTMODE" != "true" ] && mount_part $PERSIST_PATH
+	   	rm -f $PERSIST_PATH/.fsec*
+		rm -f $PERSIST_PATH/.aera*
+	   	[ "$PERSIST_PATH" = "$TMP_DIR/persist" -o "$BOOTMODE" != "true" ] && umount_part $PERSIST_PATH
+	else
+		[ "$PERSIST_PATH" = "ERROR" ] && ui_print "- Some old settings might remain."
+	fi
+
+	# other contingencies (eg, installing with R11, or with another recovery)
+	local F=""
+	if [ -n "$AERA_SETTINGS_ROOT_DIRECTORY" ]; then
+		F=$AERA_SETTINGS_ROOT_DIRECTORY"/AERA"
+		if [ "$F" != "$AERA_SETTINGS" ]; then
+			AERA_SETTINGS=$F
+			rm -rf $AERA_SETTINGS/.theme
+			rm -rf $AERA_SETTINGS/.navbar
+			rm -f $AERA_SETTINGS/.fox*
+		fi
+	fi
+
+	if [ -n "$AERA_MISCELLANEOUS_ROOT_DIRECTORY" ]; then
+		F=$AERA_MISCELLANEOUS_ROOT_DIRECTORY"/AERA"
+		if [ "$F" != "$AERA_HOME" ]; then
+			AERA_HOME=$F
+			rm -rf $AERA_HOME/.bin.
+			rm -f $AERA_HOME/.bash*
+			rm -f $AERA_HOME/fox*
+		fi
+	fi
+	#
+}
+
+# install the AERA extras to internal SD
+Install_AERA_Extras_To_sdcard() {
+	local F=0
+	local internal_SD
+	ui_print "- Installing AERA files on the internal SD ..."
+	if [ -n "$AERA_MISCELLANEOUS_ROOT_DIRECTORY" ]; then
+		internal_SD="$AERA_MISCELLANEOUS_ROOT_DIRECTORY"
+		[ ! -d $internal_SD ] && mkdir -p $internal_SD
+		F=1
+	elif [ "$BOOTMODE" = "true" ]; then
+	    F=1
+	    if [ -d "$EXTERNAL_STORAGE" ]; then
+	       internal_SD="$EXTERNAL_STORAGE"
+	    elif [ -d /storage/emulated/0 ]; then
+	       internal_SD="/storage/emulated/0"
+	    elif [ -d /data/media/0 ]; then
+	       internal_SD="/data/media/0"
+	    elif [ -d /sdcard ]; then
+	       internal_SD="/sdcard"
+	    else
+	       F=0
+	    fi
+	else
+	    internal_SD="/sdcard"
+	    mount_part "$internal_SD"
+	    F=$(is_mounted "$internal_SD")
+	    [ "$F" = "0" ] && {
+	   	internal_SD="$EXTERNAL_STORAGE"
+	   	[ -z "$internal_SD" ] && internal_SD="/data/media/0"
+	   	mount_part "$internal_SD"
+	   	F=$(is_mounted "$internal_SD")
+	    }
+	fi
+
+	echo "$internal_SD"
+
+	[ "$F" = "1" ] && {
+	   ui_print "- internal_SD=$internal_SD"
+	   rm -rf "$internal_SD/AERA/Files"
+	   package_extract_dir "sdcard" "$internal_SD"
+	   chcon -R "u:object_r:media_rw_data_file:s0" "$internal_SD/AERA"
+	   chown -R "media_rw:media_rw" "$internal_SD/AERA"
+	}
+}
+
+# main function
+Main() {
+	local internal_SD=""
+	local F=0
+
+	aera_package "AERA Recovery RELEASE_VER" "$TARGET_DEVICE" \
+		"AERA Recovery Project" "AERA build system"
+	aera_stage 5 1 4 "Verifying update" \
+		"Checking device identity and installer requirements."
+
+	ui_print "*************************************"
+	ui_print "*** |AERA Recovery Project|  ***"
+	ui_print "***   |By The AERA Team|     ***"
+	ui_print "***   |Installer V:$MOD_DATE|      ***"
+	ui_print "*************************************"
+	ui_print " "
+
+# are we installing only the fox extras?
+	if echo "$ZIPFILE" | grep -q "fox_extras"; then
+		F=1
+	fi
+
+# persist
+	PERSIST_PATH=$(find_persist)
+
+# are we running on Android?
+	if [ "$BOOTMODE" = "true" ]; then
+		if [ "$F" = "1" ]; then
+			ui_print "- AERA installation: running on Android."
+			abort "- You cannot install only the AERA extra files from Android."
+		fi
+
+		ui_print "- AERA installation: running on Android."
+		ui_print "- This installation mode is experimental."
+
+		[ "$PERSIST_PATH" = "ERROR" ] && {
+			ui_print "- Some features might be missing - so,"
+			ui_print "- flash this zip again, with AERA."
+		}
+		ui_print ""
+	fi
+
+# check if we have any device requirements
+	CheckRequirements
+
+# extract the zip installer
+	aera_stage 18 1 4 "Preparing update" \
+		"Extracting the recovery image and installation tools."
+	Unzip_Installer_Package
+
+# Install the recovery
+	if [ "$F" != "1" ]; then
+		aera_stage 38 2 4 "Updating AERA Recovery" \
+			"Installing the recovery image to the required partition slots."
+		ui_print "- Installing AERA recovery ..."
+
+		Install_Recovery
+
+		[ "$ERROR_CODE" = "1" ] && {
+			abort "- The installation of AERA recovery was not successful ..."
+		}
+	fi
+
+# Install /sdcard stuff
+	aera_stage 78 3 4 "Installing support files" \
+		"Copying recovery tools and files to device storage."
+	internal_SD=$(Install_AERA_Extras_To_sdcard)
+
+# If we only installed the extras
+	if [ "$F" = "1" ]; then
+		ui_print "- Finished installing the AERA extras"
+		ui_print "- The extra files are in $internal_SD/AERA/Files/"
+		ui_print " "
+		rm -rf $EX_DIR
+		aera_complete "Installation complete" \
+			"AERA files were installed successfully."
+		exit 0
+	fi
+
+# Prevent the stock recovery from replacing this recovery
+	aera_stage 92 4 4 "Finalizing update" \
+		"Applying settings and protecting the installed recovery."
+	MountThemAll
+
+	if [ "$AERA_VANILLA_BUILD" = "1" ]; then
+	   ui_print "- Not disabling stock recovery overwrites!"
+	else
+	   ui_print "- Disabling stock recovery overwrites..."
+	   Disable_stock_recovery_overwrites
+	fi
+
+	LogFreshInstall
+
+	[ "$AERA_RESET_SETTINGS" != "disabled" ] && Reset_Settings "$internal_SD"
+
+# backup recovery.log -> Fox/logs/install.log
+    ui_print "- Finished."
+    [ "$BOOTMODE" = "true" ] || {
+	mkdir -p $internal_SD/AERA/logs
+	ui_print "- Backing up recovery.log to $internal_SD/AERA/logs/install.log ..."
+		cp -a /tmp/recovery.log $internal_SD/AERA/logs/install.log
+		[ "$internal_SD" = "/sdcard" ] && umount_part "$internal_SD" > /dev/null 2>&1
+	}
+
+# umount
+	UnMountThemAll
+
+# Finish and reboot
+	ui_print "- Finished installing AERA!"
+	ui_print "- Extra files are in $internal_SD/AERA/Files/"
+	ui_print " "
+	rm -rf $EX_DIR
+	F=""
+
+	# don't reboot automatically if it is an A/B device, AERA is running, and there is no dedicated recovery partition
+	if [ "$AERA_AB_DEVICE_WITH_RECOVERY_PARTITION" = "1" -o -e $RECOVERY_PARTITION"_b" ]; then
+	   F=""; # dummy, to prevent a runtime error
+	elif [ "$AERA_AB_DEVICE" = "1" -o "$(Is_AB_Device)" = "1" ]; then
+	   F=$($GETPROP "aera.postinit.status")
+	   [ -z "$F" ] && F=$($GETPROP "aera.crash_counter")
+	   if [ -n "$F" ]; then
+	   	ui_print " "
+		ui_print "- Now, you need to reboot AERA."
+	   	ui_print " "
+		if [ "$AERA_VIRTUAL_AB_DEVICE" != "1" ]; then
+			ui_print "- If you have just flashed a ROM, first switch the slot before rebooting AERA."
+	   		ui_print " "
+	   		ui_print " "
+	   	fi
+		aera_complete "AERA Recovery updated" \
+			"The update finished successfully. Reboot recovery when ready."
+		exit 0
+	   fi
+	fi
+
+	if [ "$AERA_INSTALLER_DISABLE_AUTOREBOOT" = "1" ]; then
+	   ui_print " "
+		ui_print "- Now, you need to reboot AERA."
+	   ui_print " "
+	   ui_print "- Auto-reboot has been disabled. Please reboot to Recovery manually."
+	   ui_print " "
+	   aera_complete "AERA Recovery updated" \
+		   "The update finished successfully. Reboot recovery when ready."
+	   exit 0
+	fi
+
+	aera_stage 100 4 4 "Restarting AERA Recovery" \
+		"Update complete. AERA will restart recovery automatically."
+	aera_reboot 5 recovery
+	ui_print " >> Rebooting to AERA Recovery in 5 seconds ..."
+	ui_print "-5s...."
+	sleep 1
+	aera_reboot 4 recovery
+	ui_print "-4s...."
+	sleep 1
+	aera_reboot 3 recovery
+	ui_print "-3s..."
+	sleep 1
+	aera_reboot 2 recovery
+	ui_print "-2s.."
+	sleep 1
+	aera_reboot 1 recovery
+	ui_print "-1s."
+	sleep 1
+
+	aera_reboot 0 recovery
+	ui_print " "
+	ui_print "- Rebooting to Recovery now ..."
+	sleep 1
+	reboot recovery
+
+	# if we reach here, then the reboot command failed
+	sleep 3
+	ui_print " "
+	ui_print "- Hmmm ... it seems that auto-reboot has failed. Please reboot to Recovery manually."
+	aera_complete "Restart required" \
+		"Automatic restart failed. Reboot recovery manually to continue."
+	exit 0
+} # end Main();
+
+# --
+Main
+# --

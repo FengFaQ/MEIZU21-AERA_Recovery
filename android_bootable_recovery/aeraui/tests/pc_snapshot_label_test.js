@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../../aera_remote/client/pc/backups.js'),'utf8');
+const start=source.indexOf('function snapshotLabel(');
+const end=source.indexOf('function backupChoice(',start);
+assert(start>=0&&end>start);
+const context=vm.createContext({});
+vm.runInContext(source.slice(start,end),context);
+const label=context.snapshotLabel({time:'2026-10-11T17:36:36.500943183Z',bytes:22124954,id:'73c230dc1234'});
+assert(label.includes('2026'));
+assert(label.includes('MB'));
+assert(label.endsWith('ID 73c230dc'));
+assert(!label.includes('MiB')&&!label.includes('500943183')&&!label.includes('T17:'));
+assert.equal(context.snapshotLabel({time:'invalid',bytes:NaN,id:null}),'Unknown date \u00b7 -- \u00b7 ID --');
+console.log(label);
+console.log('PC snapshot date, decimal size and backup ID checks passed');

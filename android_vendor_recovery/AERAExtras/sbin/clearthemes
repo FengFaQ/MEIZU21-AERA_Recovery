@@ -1,0 +1,31 @@
+#!/system/bin/sh
+# ---------------------------
+# clear the themes and navbar settings folders
+# 26 January 2026
+# -------------------------
+LOG() {
+	echo "$@";
+	echo "$@" >> /tmp/recovery.log;
+}
+
+LOG "Running: $0";
+H=$(getprop ro.aera.home);
+if [ -n "$H" ]; then
+	if [ -d $H/.theme -o -d $H/.navbar ]; then
+		LOG "I: removing themes and navbar from $H";
+		rm -rf $H/.theme;
+		rm -rf $H/.navbar;
+	fi
+fi
+
+H=$(getprop ro.aera.settings);
+if [ -n "$H" ]; then
+	if [ -d $H/.theme -o -d $H/.navbar ]; then
+		LOG "I: removing themes and navbar from $H";
+		rm -rf $H/.theme;
+		rm -rf $H/.navbar;
+	fi
+fi
+
+exit 0;
+#

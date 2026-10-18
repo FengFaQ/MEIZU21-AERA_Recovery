@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <remote name="TeamWin"
+            fetch="https://github.com/TeamWin"
+            review="https://gerrit.twrp.me"/>
+
+    <remote name="LineageOS"
+            fetch="https://github.com/LineageOS"
+            review="https://review.lineageos.org"/>
+
+    <!-- Public downloads use HTTPS; authorized contributors push over SSH. -->
+    <remote name="AERA"
+            fetch="https://github.com/AERA-Recovery"
+            pushurl="ssh://git@github.com/AERA-Recovery"/>
+
+    <remote name="github"
+            fetch="https://github.com"/>
+
+    <!-- Replace platform projects with the AERA-maintained recovery variants. -->
+    <remove-project name="platform/bionic"/>
+    <remove-project name="platform/build" />
+    <remove-project name="platform/build/soong" />
+    <remove-project name="platform/cts" />
+    <remove-project name="platform/external/icu" />
+    <remove-project name="platform/external/libxml2" />
+    <remove-project name="platform/external/sqlite" />
+    <remove-project name="platform/external/libchrome" />
+    <remove-project name="platform/external/zstd" />
+    <remove-project name="platform/frameworks/hardware/interfaces" />
+    <remove-project name="platform/hardware/interfaces"/>
+    <remove-project name="platform/system/extras"/>
+    <remove-project name="platform/system/libhidl" />
+    <remove-project name="platform/system/security" />
+    <remove-project name="platform/system/sepolicy" />
+    <remove-project name="platform/system/update_engine" />
+    <remove-project name="platform/system/vold" />
+    <remove-project name="platform/external/xz-embedded" />
+
+    <!-- AERA recovery build system and patched platform sources. -->
+    <project path="build/make" name="android_build_make" remote="AERA" revision="aera-16.0">
+        <linkfile src="CleanSpec.mk" dest="build/CleanSpec.mk" />
+        <linkfile src="buildspec.mk.default" dest="build/buildspec.mk.default" />
+        <linkfile src="core" dest="build/core" />
+        <linkfile src="envsetup.sh" dest="build/envsetup.sh" />
+        <linkfile src="target" dest="build/target" />
+        <linkfile src="tools" dest="build/tools" />
+    </project>
+    <project path="build/soong" name="android_build_soong" remote="AERA" revision="aera-16.0">
+        <linkfile src="root.bp" dest="Android.bp" />
+        <linkfile src="bootstrap.bash" dest="bootstrap.bash" />
+    </project>
+    <project path="bionic" name="android_bionic" remote="AERA" revision="aera-16.0"/>
+    <project path="cts" name="android_cts" remote="AERA" revision="aera-16.0"/>
+    <project path="external/icu" name="android_external_icu" remote="AERA" revision="aera-16.0"/>
+    <project path="external/libxml2" name="android_external_libxml2" remote="AERA" revision="aera-16.0"/>
+    <project path="external/sqlite" name="android_external_sqlite" remote="AERA" revision="aera-16.0"/>
+    <project path="external/libchrome" name="android_external_libchrome" remote="AERA" revision="aera-16.0"/>
+    <project path="external/zstd" name="android_external_zstd" remote="AERA" revision="aera-16.0"/>
+    <project path="frameworks/hardware/interfaces" name="android_frameworks_hardware_interfaces" remote="AERA" revision="aera-16.0"/>
+    <project path="hardware/interfaces" name="android_hardware_interfaces" remote="AERA" revision="aera-16.0" />
+    <project path="system/libhidl" name="android_system_libhidl" remote="AERA" revision="aera-16.0"/>
+    <project path="system/sepolicy" name="android_system_sepolicy" remote="AERA" revision="aera-16.0"/>
+    <project path="system/security" name="android_system_security" remote="AERA" revision="aera-16.0"/>
+    <project path="system/update_engine" name="android_system_update_engine" remote="AERA" revision="aera-16.0"/>
+    <project path="system/vold" name="android_system_vold" remote="AERA" revision="aera-16.0"/>
+    <project path="system/extras" name="android_system_extras" remote="AERA" revision="aera-16.0"/>
+    <project path="external/xz-embedded" name="android_external_xz-embedded" remote="AERA" revision="aera-16.0" groups="pdk"/>
+
+    <!-- AERA's TWRP vendor build-system fork. -->
+    <project path="vendor/twrp" name="android_vendor_twrp" remote="AERA" revision="aera-16.0" />
+
+    <!-- Include fake OMAPI for the recovery -->
+    <project name="android_external_se_omapi" path="external/se_omapi" remote="AERA" revision="aera-16.0" />
+
+    <!-- Native AERA Recovery command-line client. -->
+    <project name="android_external_aeracli" path="external/aeracli" remote="AERA" revision="aera-16.0" />
+
+    <!-- Include phh's treble repo for lptools support -->
+    <project name="phhusson/vendor_lptools" path="external/lptools" remote="github" revision="master" />
+
+    <!-- Include external/bash for bash support -->
+    <project path="external/bash" name="android_external_bash" remote="LineageOS" revision="lineage-22.2"/>
+
+    <!-- Include external/libncurses for bash and nano support -->
+    <project path="external/libncurses" name="android_external_libncurses" remote="LineageOS" revision="lineage-22.2"/>
+
+    <!-- Include external/nano for nano support -->
+    <project path="external/nano" name="android_external_nano" remote="LineageOS" revision="lineage-22.2"/>
+
+    <!-- Include ntfs_3g for NTFS support -->
+    <project path="external/ntfs-3g" name="android_external_ntfs-3g" remote="LineageOS" revision="lineage-22.2"/>
+
+    <!-- Include lineage-tools for lzma support -->
+    <project path="prebuilts/tools-lineage" name="android_prebuilts_tools-lineage" remote="LineageOS" revision="lineage-22.2"/>
+
+    <!-- Include external Magisk repo for repack binaries -->
+    <project path="external/magisk-prebuilt" name="external_magisk-prebuilt" remote="TeamWin" revision="android-12.1"/>
+
+    <!-- Qualcomm recovery common tree: provides the qcom_decrypt / qcom_decrypt_fbe
+         modules (init.recovery.qcom_decrypt.rc) that start qseecomd + the keymaster/
+         keymint HALs in recovery. Required for FBE/FDE decryption on Qualcomm devices
+         (imported by Dodge's init.recovery.qcom.rc).
+         AERA fork with the original TeamWin ancestry retained. -->
+    <project path="device/qcom/twrp-common" name="android_device_qcom_twrp-common" remote="AERA" revision="aera-16.0"/>
+
+    <!-- AERA-specific projects, removals, and the Dodge device tree. -->
+    <include name="aera.xml"/>
+
+    <!-- LAST: Remove unused projects for minimal manifest -->
+    <include name="remove-minimal.xml"/>
+</manifest>

@@ -1,0 +1,13 @@
+AERA Recovery Project R1.0
+==========================
+
+- First AERA release.
+- Modern GPU-accelerated recovery interface and boot animation.
+- Decryption, backup, restore, wipe, format-data, file manager, and terminal.
+- Wi-Fi, network storage, plugin manager, browser, media, gallery, and RetroArch.
+- Theme engine, quick settings, landscape support, lock screen, and gestures.
+- Fastbootd interface with live flash telemetry.
+- Root manager with KernelSU, KernelSU Next, and SukiSU Ultra support.
+- Recovery audio, haptics, screenshots, and screen recording.
+
+Built for OnePlus 13 (`dodge`) on Android 16.

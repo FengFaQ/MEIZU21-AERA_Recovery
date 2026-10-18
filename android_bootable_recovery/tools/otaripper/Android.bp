@@ -1,0 +1,19 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_prebuilt_binary {
+    name: "aera-otaripper",
+    recovery: true,
+    enabled: false,
+    arch: {
+        arm64: {
+            enabled: true,
+            srcs: ["prebuilt/arm64/aera-otaripper"],
+        },
+    },
+    compile_multilib: "64",
+    strip: { none: true },
+    check_elf_files: false,
+    stl: "none",
+}

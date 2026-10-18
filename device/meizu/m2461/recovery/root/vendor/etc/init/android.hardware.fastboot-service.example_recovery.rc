@@ -1,0 +1,14 @@
+# Copyright (c) 2023 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+# Meizu 21 (m2461, SM8650) - ported from the verified TWRP recovery tree.
+# android.hardware.fastboot.IFastboot/default backs AERA fastbootd
+# (AERA_INCLUDE_FASTBOOTD / AERA_AB_DEVICE_WITH_RECOVERY_PARTITION).
+service vendor.fastboot-default /vendor/bin/hw/android.hardware.fastboot-service.example_recovery
+    class hal
+    user root
+    group root
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
+    seclabel u:r:recovery:s0
+    interface aidl android.hardware.fastboot.IFastboot/default

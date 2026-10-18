@@ -1,0 +1,64 @@
+// Minimal decode-only libwebp for APK icons in AERA recovery.
+// Upstream: https://chromium.googlesource.com/webm/libwebp (v1.5.0)
+package {
+    default_applicable_licenses: ["aera_libwebp_license"],
+}
+
+license {
+    name: "aera_libwebp_license",
+    visibility: [":__subpackages__"],
+    license_kinds: ["SPDX-license-identifier-BSD"],
+    license_text: ["COPYING", "PATENTS"],
+}
+
+cc_library_static {
+    name: "libaera_webp_decoder",
+    recovery_available: true,
+    srcs: [
+        "src/dec/alpha_dec.c",
+        "src/dec/buffer_dec.c",
+        "src/dec/frame_dec.c",
+        "src/dec/idec_dec.c",
+        "src/dec/io_dec.c",
+        "src/dec/quant_dec.c",
+        "src/dec/tree_dec.c",
+        "src/dec/vp8_dec.c",
+        "src/dec/vp8l_dec.c",
+        "src/dec/webp_dec.c",
+        "src/dsp/alpha_processing.c",
+        "src/dsp/alpha_processing_neon.c",
+        "src/dsp/cpu.c",
+        "src/dsp/dec.c",
+        "src/dsp/dec_clip_tables.c",
+        "src/dsp/dec_neon.c",
+        "src/dsp/filters.c",
+        "src/dsp/filters_neon.c",
+        "src/dsp/lossless.c",
+        "src/dsp/lossless_neon.c",
+        "src/dsp/rescaler.c",
+        "src/dsp/upsampling.c",
+        "src/dsp/upsampling_neon.c",
+        "src/dsp/yuv.c",
+        "src/dsp/yuv_neon.c",
+        "src/utils/bit_reader_utils.c",
+        "src/utils/color_cache_utils.c",
+        "src/utils/filters_utils.c",
+        "src/utils/huffman_utils.c",
+        "src/utils/palette.c",
+        "src/utils/quant_levels_dec_utils.c",
+        "src/utils/random_utils.c",
+        "src/utils/rescaler_utils.c",
+        "src/utils/thread_utils.c",
+        "src/utils/utils.c",
+    ],
+    export_include_dirs: ["src"],
+    cflags: [
+        "-DANDROID",
+        "-DHAVE_MALLOC_H",
+        "-DWEBP_REDUCE_SIZE",
+        "-fvisibility=hidden",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-Wno-unused-function",
+    ],
+}

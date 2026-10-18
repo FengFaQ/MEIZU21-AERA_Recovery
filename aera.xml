@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+     AERA-specific manifest layer.
+
+     This mirrors the recovery stack used by AERA on private GitHub repositories.
+     The original upstream ancestry remains intact in each aera-16.0 branch.
+-->
+<manifest>
+
+    <!-- Replace AOSP projects with their AERA counterparts -->
+    <remove-project name="platform/bootable/recovery" />
+    <remove-project name="platform/system/core" />
+    <remove-project name="platform/packages/modules/adb" />
+    <remove-project name="platform/packages/modules/Connectivity" />
+    <remove-project name="platform/external/libfuse" />
+
+    <!-- AERA recovery, preserving the complete upstream ancestry. -->
+    <project path="bootable/recovery" name="android_bootable_recovery" remote="AERA" revision="aera-16.0"/>
+
+    <!-- AERA's LVGL UI engine, Android build module, and GPU extensions. -->
+    <project path="external/lvgl" name="android_external_lvgl" remote="AERA" revision="aera-16.0"/>
+
+    <!-- AERA vendor build system -->
+    <project path="vendor/recovery" name="android_vendor_recovery" remote="AERA" revision="aera-16.0"/>
+
+    <!-- AERA-patched sources -->
+    <project path="system/core" name="android_system_core" remote="AERA" revision="aera-16.0"/>
+    <project path="packages/modules/adb" name="android_packages_modules_adb" remote="AERA" revision="aera-16.0"/>
+
+    <!-- Recovery connectivity support -->
+    <project path="packages/modules/Connectivity" name="android_packages_modules_Connectivity" remote="AERA" revision="aera-16.0"/>
+
+    <!-- Terminal (ttyd) + dependencies -->
+    <project path="external/libuv" name="android_external_libuv" remote="AERA" revision="aera-16.0"/>
+    <project path="external/json-c" name="android_external_json-c" remote="AERA" revision="aera-16.0"/>
+    <project path="external/ttyd" name="android_external_ttyd" remote="AERA" revision="aera-16.0"/>
+    <project path="external/libwebsockets" name="android_external_libwebsockets" remote="AERA" revision="aera-16.0"/>
+
+    <!-- rclone for cloud backup -->
+    <project path="external/rclone" name="android_external_rclone" remote="AERA" revision="aera-16.0"/>
+
+    <!-- libfuse -->
+    <project path="external/libfuse" name="android_external_libfuse" remote="AERA" revision="aera-16.0"/>
+
+    <!-- Terminal emulator (libvterm) for the recovery's in-UI terminal. -->
+    <project path="external/libvterm" name="android_external_libvterm" remote="AERA" revision="aera-16.0"/>
+
+    <!-- SIMD JPEG transport for the low-latency browser mirror. -->
+    <remove-project name="platform/external/libjpeg-turbo"/>
+    <project path="external/libjpeg-turbo" name="platform/external/libjpeg-turbo"
+             remote="aosp" revision="refs/tags/android-16.0.0_r1" groups="pdk"/>
+
+    <!--
+      Device trees are intentionally not synced by the common AERA manifest.
+      Add the device repository you want to build as a local manifest instead.
+
+      <project path="device/oneplus/dodge" name="android_device_oneplus_dodge-AERA" remote="AERA" revision="aera-16.0"/>
+      <project path="device/oneplus/infiniti" name="android_device_oneplus_infiniti-AERA" remote="AERA" revision="aera-16.0"/>
+    -->
+
+</manifest>
