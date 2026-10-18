@@ -188,13 +188,11 @@ jobs:
             df -h / | tail -1
             df -i / | tail -1
             free -m | head -2
-            repo sync -c -j"$SYNC_JOBS" \
-              -x cts,tradefed,vts,developers,desktop,pdk-desktop,android-desktop \
-              -x darwin,platform-darwin,motodev,adt-infra \
-              -x device,pixel,yukawa,dragonboard,hikey,broadcom_pdk,broadcom_wlan \
-              -x qcom_msm8x26,qcom_wlan,invensense,drm_hwcomposer,trusty \
-              -x notdefault,sysui-studio \
-              2>&1 | tee /tmp/sync.log
+            # one single -x: repo's argparse keeps only the last occurrence of
+            # a flag, so repeating -x silently dropped every earlier group and
+            # run #14 died with exit code 2.
+            EXCLUDES='cts,tradefed,vts,developers,desktop,pdk-desktop,android-desktop,darwin,platform-darwin,motodev,adt-infra,device,pixel,yukawa,dragonboard,hikey,broadcom_pdk,broadcom_wlan,qcom_msm8x26,qcom_wlan,invensense,drm_hwcomposer,trusty,notdefault,sysui-studio'
+            repo sync -c -j"$SYNC_JOBS" -x "$EXCLUDES" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
