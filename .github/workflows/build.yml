@@ -298,6 +298,21 @@ jobs:
           test -f external/lvgl/lvgl.h                                 && echo "lvgl OK"
           df -h / | tail -1
 
+          # Restore executable bits. This monorepo was assembled on Windows,
+          # where the filesystem has no exec bit, so the very first commit
+          # recorded every script as 100644. Run #21 then died at 98% with
+          #
+          #   bootable/recovery/prebuilt/relink.sh: Permission denied
+          #
+          # (the fix_relinked binaries/libraries targets). The mode bits are
+          # now corrected in git as well; this chmod is the belt-and-braces
+          # pass for anything else that lost its bit in transit.
+          echo "===== restoring exec bits ====="
+          find bootable/recovery vendor/recovery external/lvgl \
+               -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} + 2>/dev/null || true
+          chmod +x bootable/recovery/prebuilt/relink.sh 2>/dev/null || true
+          ls -l bootable/recovery/prebuilt/relink.sh
+
           # envsetup.sh and the build scripts shell out to git here. Without a
           # .git they print "fatal: not a git repository"; with an EMPTY .git
           # they print "fatal: your current branch 'master' does not have any
