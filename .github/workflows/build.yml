@@ -12,8 +12,11 @@ permissions:
   contents: write
 
 concurrency:
+  # Cancel an in-flight build when a newer commit is pushed: a build that is
+  # still syncing on stale workflow code is pure waste (and its 350 min budget
+  # would block the queue).
   group: aera-m2461-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   MANIFEST_URL: https://github.com/FengFaQ/MEIZU21-AERA_Recovery
@@ -136,13 +139,13 @@ jobs:
             # No --partial-clone here: partial clone is already configured by
             # `repo init --partial-clone`, and repeating it on sync made repo
             # exit 2 immediately (argparse reject) in run #2.
-            repo sync -c -j"$SYNC_JOBS" > /tmp/sync.log 2>&1
-            rc=$?
+            # Run #4 proved the previous form was undiagnosable: output went to
+            # /tmp/sync.log only, so the job log showed 31 minutes of nothing
+            # and then exit 1. stream it (tee) so progress and the failing
+            # project are visible in real time.
+            repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
+            rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
-            # Surface the tail of the log both in stdout and as a workflow
-            # error annotation, so the reason is recoverable without the
-            # private job log.
-            tail -40 /tmp/sync.log
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
             # Emit the real error lines as annotations (visible without the
             # authenticated job log) plus a disk/space snapshot, since
@@ -151,8 +154,7 @@ jobs:
               | sed 's/^/::error::sync: /' || true
             echo "::error::sync disk: $(df -h /aosp | tail -1)"
             echo "retrying with a gentler, forced sync"
-            repo sync -c --force-sync -j2 > /tmp/sync2.log 2>&1 || true
-            tail -20 /tmp/sync2.log
+            repo sync -c --force-sync -j2 2>&1 | tee /tmp/sync2.log || true
             sleep 20
           done
           echo "===== sync summary ====="
