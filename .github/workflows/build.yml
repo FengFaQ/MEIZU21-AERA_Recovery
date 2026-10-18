@@ -33,21 +33,22 @@ jobs:
       # ---------------------------------------------------------------- space
       # Disk is the #1 killer here: an AOSP 16 tree plus its .repo object
       # store overflows the stock 14 GB runner disk and the runner is killed
-      # ("The hosted runner lost communication with the server"), which is
-      # exactly how run #1 died inside repo sync (62 min) and run #3 died
-      # inside the compile step (48 min).
+      # Two different failures came from the same knob, in opposite directions:
+      #   run #1: default sizing     -> runner killed in repo sync (62 min)
+      #   run #3: root-reserve 4096  -> runner killed in the compile (48 min),
+      #                                 because / was only 4 GB
+      #   run #4: root-reserve 30 GB -> repo sync itself failed after 31 min,
+      #                                 because /aosp only got the remainder
       #
-      # README of the action: "You will not have more space on the root volume
-      # available than specified in root-reserve-mb". With 4096 the whole / fs
-      # is 4 GB, but AOSP keeps writing to / (soong intermediates under /tmp,
-      # ninja temp files, /home/runner, /root/.cache) and blew it up mid-build.
-      # Give / a real 30 GB, keep 8 GB on /mnt, and overprovision so a slightly
-      # too small reservation cannot kill the runner.
+      # The fix is to stop fighting over a fixed disk. / only needs enough for
+      # the runner user dirs, apt and small scratch; everything heavy (source
+      # tree, .repo, out/, and TMPDIR) is pointed at /aosp. 10 GB root, 4 GB
+      # /mnt and 4 GB swap leave the bulk (~66 GB) to the build volume.
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 30720
-          temp-reserve-mb: 8192
+          root-reserve-mb: 10240
+          temp-reserve-mb: 4096
           swap-size-mb: 4096
           overprovision-lvm: 'true'
           remove-dotnet: 'true'
@@ -143,18 +144,27 @@ jobs:
             # private job log.
             tail -40 /tmp/sync.log
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
-            grep -m3 -E 'error|fatal|Error' /tmp/sync.log \
+            # Emit the real error lines as annotations (visible without the
+            # authenticated job log) plus a disk/space snapshot, since
+            # "No space left on device" is the failure we keep chasing.
+            grep -m5 -E 'error:|fatal:|No space left' /tmp/sync.log \
               | sed 's/^/::error::sync: /' || true
+            echo "::error::sync disk: $(df -h /aosp | tail -1)"
             echo "retrying with a gentler, forced sync"
             repo sync -c --force-sync -j2 > /tmp/sync2.log 2>&1 || true
             tail -20 /tmp/sync2.log
             sleep 20
           done
           echo "===== sync summary ====="
+          df -h / | tail -1
           df -h /aosp | tail -1
           du -sh "$SRC" 2>/dev/null || true
           du -sh "$SRC/.repo" 2>/dev/null || true
-          if [ "$ok" -ne 1 ]; then echo "::error::repo sync failed after 3 attempts"; exit 1; fi
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::repo sync failed after 3 attempts; last errors:"
+            grep -m8 -E 'error|fatal|No space' /tmp/sync.log | sed 's/^/::error::/' || true
+            exit 1
+          fi
           test -f build/envsetup.sh || { echo "::error::incomplete tree: build/envsetup.sh missing"; exit 1; }
           test -d bionic               || { echo "::error::incomplete tree: bionic missing"; exit 1; }
           test -d build/soong          || { echo "::error::incomplete tree: build/soong missing"; exit 1; }
