@@ -73,14 +73,21 @@ AERA_NO_TREBLE_COMPATIBILITY_CHECK := 1
 # Show the "Keep current ABL" preference (Abl/bootloader preservation).
 AERA_ENABLE_ABL_PRESERVATION := 1
 
-# --- Wi-Fi (intentionally disabled) --------------------------------------
-# AERA_ENABLE_WLAN is deliberately NOT set:
-#  * the verified TWRP tree for this device sets TW_NO_NETWORK := true and
-#    ships no WLAN firmware, supplicant configuration or CNSS/cnss2 modules
-#    in the ramdisk;
-#  * Meizu's WLAN drivers (cnss2.ko and friends) live in vendor_dlkm and are
-#    not preloaded, so the recovery has no usable network interface.
-# Enabling the switch would only pull in wpa_supplicant/dhcptool and fail at
-# runtime. Revisit this together with a verified WLAN blob set.
-# AERA_ENABLE_WLAN := 1
+# --- Wi-Fi ----------------------------------------------------------------
+# Must be ON, even though this device has no usable WLAN in recovery.
 #
+# bootable/recovery/Android.mk gates aera_secrets/aera_secrets.cpp behind
+# `ifeq ($(OF_ENABLE_WLAN),1)`, but aeraui/platform/aera_backend.cpp calls
+# AeraSecrets::UsePrimaryWlan() (line 3114) and AeraSecrets::SetNasPrivateKey()
+# (line 3966) unconditionally. With the switch off, the build fails at link
+# time:
+#   ld.lld: error: undefined symbol: AeraSecrets::UsePrimaryWlan(...)
+#   ld.lld: error: undefined symbol: AeraSecrets::SetNasPrivateKey(...)
+# That is an inconsistency in the AERA sources (the UI references symbols that
+# only exist in the WLAN build), so the switch has to be on to link at all.
+#
+# Runtime note: the verified TWRP tree sets TW_NO_NETWORK because Meizu's CNSS
+# drivers live in vendor_dlkm and no WLAN firmware ships in the ramdisk, so the
+# Wi-Fi panel will most likely report "not available" on device. That is
+# acceptable - it only costs a few hundred KB and is required for the build.
+AERA_ENABLE_WLAN := 1

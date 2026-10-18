@@ -365,9 +365,12 @@ jobs:
           # with only 936 MB of RAM left, so -j4 on a 4 vCPU / 16 GB runner is
           # still too wide. Two concurrent compile jobs plus a 16 GB swap file
           # is the shape that fits this machine.
-          export SOONG_UI_JOB_LIMIT=2
+          # Job count. Run #20 finished the whole compile with 14.9 GB of RAM
+          # still free at exit, so -j2 was overly cautious; -j3 uses the
+          # headroom without approaching the OOM that killed #17-#19.
+          export SOONG_UI_JOB_LIMIT=3
           set +e
-          mka -j2 adbd recoveryimage > /build/build.log 2>&1 &
+          mka -j3 adbd recoveryimage > /build/build.log 2>&1 &
           BUILD_PID=$!
           (
             while kill -0 "$BUILD_PID" 2>/dev/null; do
