@@ -188,11 +188,13 @@ jobs:
             df -h / | tail -1
             df -i / | tail -1
             free -m | head -2
-            # one single -x: repo's argparse keeps only the last occurrence of
-            # a flag, so repeating -x silently dropped every earlier group and
-            # run #14 died with exit code 2.
-            EXCLUDES='cts,tradefed,vts,developers,desktop,pdk-desktop,android-desktop,darwin,platform-darwin,motodev,adt-infra,device,pixel,yukawa,dragonboard,hikey,broadcom_pdk,broadcom_wlan,qcom_msm8x26,qcom_wlan,invensense,drm_hwcomposer,trusty,notdefault,sysui-studio'
-            repo sync -c -j"$SYNC_JOBS" -x "$EXCLUDES" 2>&1 | tee /tmp/sync.log
+            # This repo build has no -x (exclude) flag on sync - run #15 said
+            #   main.py: error: no such option: -x
+            # sync only accepts -g (include these groups). Prune by including
+            # the groups a recovery build needs; everything the build links
+            # against lives in the default/pdk families.
+            GROUPS='pdk,pdk-cw,pdk-cw-fs,pdk-fs,pdk-qcom,generic_fs,linux,projectarch,tools,vendor,libxml2,libyuv,frameworks_ims,apps_se,apps_stk'
+            repo sync -c -j"$SYNC_JOBS" -g "$GROUPS" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
