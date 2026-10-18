@@ -56,9 +56,14 @@ jobs:
           df -h /
           df -i /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          sudo docker image prune --all --force || true
+                      /opt/hostedtoolcache /usr/local/share/boost \
+                      /usr/share/swift /usr/lib/jvm /usr/local/aws-cli \
+                      /usr/local/aws /opt/microsoft /usr/local/.ghcup \
+                      /opt/az /usr/share/miniconda /usr/local/go \
+                      /usr/lib/mono /usr/lib/R || true
+          sudo docker system prune --all --force --volumes || true
           sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
           echo "=== after ==="
           df -h /
           df -i /
@@ -139,7 +144,11 @@ jobs:
 
       # bootable/recovery, external/lvgl and vendor/recovery ship inside the
       # monorepo (see the overlay step), so repo must not fetch them.
-      - name: Local manifest - skip AERA repos shipped in the monorepo
+      # local-prune.xml additionally drops the AOSP projects a recovery build
+      # never touches (CTS/VTS/tradefed, dev tooling, foreign-arch prebuilts),
+      # because run #12 filled the whole 145 GB runner disk and GitHub could
+      # not even write its own diagnostic log.
+      - name: Local manifests - monorepo overlay and AOSP pruning
         run: |
           cd "$SRC"
           mkdir -p .repo/local_manifests
@@ -151,9 +160,13 @@ jobs:
             <remove-project name="android_vendor_recovery" />
           </manifest>
           XML
-          cat .repo/local_manifests/00-meizu21.xml
-          # keep a copy outside .repo: a repo init fallback re-creates .repo
-          cp -f .repo/local_manifests/00-meizu21.xml /tmp/local-manifest.xml
+          cp -f "$MONO/local-prune.xml" .repo/local_manifests/01-prune.xml
+          ls -la .repo/local_manifests
+          echo "--- projects after pruning (dry run) ---"
+          repo list 2>/dev/null | wc -l
+          # keep copies outside .repo: a repo init fallback re-creates .repo
+          mkdir -p /tmp/localmanifests
+          cp -f .repo/local_manifests/*.xml /tmp/localmanifests/
 
       # The step must FAIL when repo sync fails: in run #1 the retry loop
       # swallowed the exit status and the tree was silently incomplete.
@@ -188,7 +201,8 @@ jobs:
               echo "work-tree init failure: retrying with partial clone"
               repo init --no-clone-bundle --partial-clone \
                 --clone-filter=blob:limit=10M -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
-              cp -f /tmp/local-manifest.xml .repo/local_manifests/00-meizu21.xml 2>/dev/null || true
+              mkdir -p .repo/local_manifests
+              cp -f /tmp/localmanifests/*.xml .repo/local_manifests/ 2>/dev/null || true
               continue
             fi
             echo "retrying with a forced sync"

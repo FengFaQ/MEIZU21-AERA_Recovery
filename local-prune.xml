@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Extra pruning for a recovery-only build.
+
+  The runner's native / is 145 GB and the full AOSP 16 tree plus
+  .repo/project-objects does not fit (run #12 filled it up and the GitHub
+  runner could not even write its own diagnostic log). remove-minimal.xml
+  already drops 601 projects; this layer drops the remaining groups that a
+  recovery image never links against: test suites, CTS, dev tooling, sample
+  code, docs, emulators and the non-arm64 prebuilts.
+
+  Anything that turns out to be needed surfaces as a missing-module build
+  error and gets removed from this list.
+-->
+<manifest>
+    <!-- test infrastructure -->
+    <remove-project name="platform/cts" />
+    <remove-project name="platform/test/suite_harness" />
+    <remove-project name="platform/test/vti/fuzz_test_serving" />
+    <remove-project name="platform/test/vts" />
+    <remove-project name="platform/test/vts-testcase/hal" />
+    <remove-project name="platform/test/vts-testcase/hal-trace" />
+    <remove-project name="platform/test/vts-testcase/kernel" />
+    <remove-project name="platform/test/vts-testcase/nbu" />
+    <remove-project name="platform/test/vts-testcase/performance" />
+    <remove-project name="platform/test/vts-testcase/security" />
+    <remove-project name="platform/test/vts-testcase/vndk" />
+    <remove-project name="platform/tools/tradefederation/prebuilts" />
+    <remove-project name="platform/tools/tradefederation" />
+    <remove-project name="platform/tools/tradefederation/contrib" />
+
+    <!-- large prebuilt toolchains that a recovery image does not need -->
+    <remove-project name="platform/prebuilts/clang/host/darwin-x86" />
+    <remove-project name="platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9" />
+    <remove-project name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.17-4.8" />
+    <remove-project name="platform/prebuilts/go/darwin-x86" />
+    <remove-project name="platform/prebuilts/jdk/jdk8" />
+    <remove-project name="platform/prebuilts/rust" />
+    <remove-project name="platform/prebuilts/remoteexecution-client" />
+    <remove-project name="platform/prebuilts/android-emulator" />
+    <remove-project name="platform/prebuilts/qemu-kernel" />
+    <remove-project name="platform/prebuilts/bazel/common" />
+    <remove-project name="platform/prebuilts/bazel/linux-x86_64" />
+    <remove-project name="platform/prebuilts/cmdline-tools" />
+    <remove-project name="platform/prebuilts/gradle-plugin" />
+    <remove-project name="platform/prebuilts/manifest-merger" />
+    <remove-project name="platform/prebuilts/maven_repo/bumptech" />
+    <remove-project name="platform/prebuilts/misc" />
+    <remove-project name="platform/prebuilts/sdk" />
+    <remove-project name="platform/prebuilts/vndk/v30" />
+    <remove-project name="platform/prebuilts/vndk/v31" />
+    <remove-project name="platform/prebuilts/vndk/v32" />
+    <remove-project name="platform/prebuilts/vndk/v33" />
+    <remove-project name="platform/prebuilts/vndk/v34" />
+    <remove-project name="platform/prebuilts/abi-dumps/ndk" />
+    <remove-project name="platform/prebuilts/abi-dumps/platform" />
+    <remove-project name="platform/prebuilts/abi-dumps/vndk" />
+    <remove-project name="platform/prebuilts/asuite" />
+    <remove-project name="platform/prebuilts/bundletool" />
+    <remove-project name="platform/prebuilts/checkstyle" />
+    <remove-project name="platform/prebuilts/ktlint" />
+    <remove-project name="platform/prebuilts/devtools" />
+    <remove-project name="platform/prebuilts/tools" />
+    <remove-project name="platform/prebuilts/ndk" />
+    <remove-project name="platform/prebuilts/clang-tools" />
+
+    <!-- kernel prebuilts for other devices/arches -->
+    <remove-project name="kernel/prebuilts/6.1/x86_64" />
+    <remove-project name="kernel/prebuilts/6.6/x86_64" />
+    <remove-project name="kernel/prebuilts/6.12/x86_64" />
+    <remove-project name="kernel/prebuilts/mainline/arm64" />
+    <remove-project name="kernel/prebuilts/mainline/x86_64" />
+
+    <!-- developer facing projects -->
+    <remove-project name="platform/developers/build" />
+    <remove-project name="platform/developers/samples/android" />
+    <remove-project name="platform/development" />
+    <remove-project name="platform/pdk" />
+    <remove-project name="platform/ndk" />
+    <remove-project name="platform/sdk" />
+    <remove-project name="platform/tools/adt/idea" />
+    <remove-project name="platform/tools/apksig" />
+    <remove-project name="platform/tools/external/fat32lib" />
+    <remove-project name="platform/tools/loganalysis" />
+    <remove-project name="platform/tools/metalava" />
+    <remove-project name="platform/tools/netsim" />
+    <remove-project name="platform/tools/test/connectivity" />
+    <remove-project name="platform/tools/test/graphicsbenchmark" />
+    <remove-project name="platform/tools/test/mobly_snippets" />
+    <remove-project name="platform/tools/test/openhst" />
+    <remove-project name="platform/tools/platform-compat" />
+    <remove-project name="tools/platform-compat" />
+    <remove-project name="platform/tools/deviceinfra/prebuilts" />
+    <remove-project name="platform/tools/deviceinfra" />
+</manifest>
