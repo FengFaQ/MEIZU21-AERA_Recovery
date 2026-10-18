@@ -68,22 +68,15 @@ jobs:
           df -h /
           df -i /
           df -h /mnt || true
-          df -h /
-          df -i /
           free -h
           echo "cpus: $(nproc)"
-          mount | grep -E ' /build ' || true
 
-      # run #6 finally explained the whole thing. maximize-build-space
-      # fallocates a 96 GB /pv.img on /, so / itself only keeps ~30 GB free
-      # even though /build shows 95 GB. repo sync was writing its scratch and
-      # git objects to /tmp and $HOME (both on /) and died with ENOSPC fetching
-      # platform/frameworks/base.
-      #
-      # From here on every heavy path points at /build via $GITHUB_ENV, so the
-      # later steps inherit it without repeating themselves.
+      # Every heavy path now lives under /build on the native root filesystem,
+      # which the runner user cannot create at the top level by itself.
       - name: Point every heavy path at the big volume
         run: |
+          sudo mkdir -p /build
+          sudo chown "$(id -u):$(id -g)" /build
           mkdir -p /build/{tmp,home,mono,source}
           {
             echo "TMPDIR=/build/tmp"
@@ -91,6 +84,7 @@ jobs:
             echo "TEMP=/build/tmp"
             echo "HOME=/build/home"
           } >> "$GITHUB_ENV"
+          ls -ld /build
           df -h /
 
       # ------------------------------------------------------------ toolchain
