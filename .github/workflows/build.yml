@@ -70,6 +70,25 @@ jobs:
           echo "cpus: $(nproc)"
           mount | grep -E ' /aosp ' || true
 
+      # run #6 finally explained the whole thing. maximize-build-space
+      # fallocates a 96 GB /pv.img on /, so / itself only keeps ~30 GB free
+      # even though /aosp shows 95 GB. repo sync was writing its scratch and
+      # git objects to /tmp and $HOME (both on /) and died with ENOSPC fetching
+      # platform/frameworks/base.
+      #
+      # From here on every heavy path points at /aosp via $GITHUB_ENV, so the
+      # later steps inherit it without repeating themselves.
+      - name: Point every heavy path at the big volume
+        run: |
+          mkdir -p /aosp/{tmp,home,mono,source}
+          {
+            echo "TMPDIR=/aosp/tmp"
+            echo "TMP=/aosp/tmp"
+            echo "TEMP=/aosp/tmp"
+            echo "HOME=/aosp/home"
+          } >> "$GITHUB_ENV"
+          df -h / /aosp
+
       # ------------------------------------------------------------ toolchain
       - name: Setup environment
         run: |
@@ -80,6 +99,8 @@ jobs:
           git config --global user.name "AERA CI"
           git config --global user.email "ci@users.noreply.github.com"
           git config --global color.ui false
+          echo "HOME=$HOME TMPDIR=$TMPDIR"
+          df -h / /aosp
           repo --version
 
       # ------------------------------------------------------------ monorepo
