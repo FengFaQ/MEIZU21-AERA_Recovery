@@ -178,6 +178,56 @@ jobs:
       # happen to be gone already is harmless. Everything the build needs is
       # in the default/pdk families, so exclude the test, desktop and
       # non-Linux groups plus the per-device ones.
+      # Prune by building the remove-project list from repo's OWN project list.
+      #
+      # Three attempts failed because the pruning was guessed:
+      #   #13  remove-project named platform/cts, already removed upstream
+      #        -> "remove-project element specifies non-existent project"
+      #   #14  five separate -x flags -> argparse keeps only the last
+      #   #15  this repo has no -x at all ("no such option: -x")
+      #   #16  -g whitelist synced only 634 MB and skipped build/envsetup.sh,
+      #        because repo skips projects that carry no groups attribute and
+      #        the AERA replacements (android_build_make, ...) have none.
+      #
+      # So ask repo what it actually has, then only remove names that exist.
+      - name: Generate prune manifest from repo's project list
+        run: |
+          cd "$SRC"
+          repo list > /tmp/projects.txt 2>/dev/null || true
+          echo "projects listed: $(wc -l < /tmp/projects.txt)"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<manifest>'
+            # a recovery image never links against any of these
+            for path in cts/ test/vts test/vti test/suite_harness \
+                        developers/build developers/samples development \
+                        tools/tradefederation tools/apksig tools/loganalysis \
+                        tools/metalava tools/netsim tools/deviceinfra \
+                        sdk/ ndk/ pdk/ \
+                        prebuilts/clang/host/darwin-x86 \
+                        prebuilts/go/darwin-x86 \
+                        prebuilts/rust \
+                        prebuilts/gradle-plugin \
+                        prebuilts/bundletool \
+                        prebuilts/vndk/v30 prebuilts/vndk/v31 \
+                        prebuilts/vndk/v32 prebuilts/vndk/v33 \
+                        prebuilts/vndk/v34 \
+                        prebuilts/android-emulator \
+                        prebuilts/qemu-kernel \
+                        kernel/prebuilts/mainline; do
+              # only emit a removal for projects this manifest really defines
+              if awk -v p="$path" 'index($1, p) == 1 && $1 == p {found=1} END{exit !found}' /tmp/projects.txt; then
+                echo "  <remove-project path=\"$path\" />"
+              fi
+            done
+            echo '</manifest>'
+          } > .repo/local_manifests/02-prune.xml
+          echo "--- generated prune ---"
+          cat .repo/local_manifests/02-prune.xml
+          cp -f .repo/local_manifests/02-prune.xml /tmp/localmanifests/ 2>/dev/null || true
+
+      # The step must FAIL when repo sync fails: in run #1 the retry loop
+      # swallowed the exit status and the tree was silently incomplete.
       - name: repo sync
         run: |
           cd "$SRC"
@@ -188,13 +238,7 @@ jobs:
             df -h / | tail -1
             df -i / | tail -1
             free -m | head -2
-            # This repo build has no -x (exclude) flag on sync - run #15 said
-            #   main.py: error: no such option: -x
-            # sync only accepts -g (include these groups). Prune by including
-            # the groups a recovery build needs; everything the build links
-            # against lives in the default/pdk families.
-            GROUPS='pdk,pdk-cw,pdk-cw-fs,pdk-fs,pdk-qcom,generic_fs,linux,projectarch,tools,vendor,libxml2,libyuv,frameworks_ims,apps_se,apps_stk'
-            repo sync -c -j"$SYNC_JOBS" -g "$GROUPS" 2>&1 | tee /tmp/sync.log
+            repo sync -c -j"$SYNC_JOBS" 2>&1 | tee /tmp/sync.log
             rc=${PIPESTATUS[0]}
             echo "attempt $i -> exit $rc"
             if [ "$rc" -eq 0 ]; then ok=1; break; fi
