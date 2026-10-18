@@ -298,6 +298,18 @@ jobs:
           test -f external/lvgl/lvgl.h                                 && echo "lvgl OK"
           df -h / | tail -1
 
+          # envsetup.sh and the build scripts shell out to git in these
+          # directories; without a .git they emit
+          #   fatal: not a git repository (or any of the parent directories)
+          # and envsetup falls into "dependencies-only mode". A throwaway repo
+          # with no commits satisfies git rev-parse lookups.
+          for d in bootable/recovery external/lvgl vendor/recovery "$DEVICE_DIR"; do
+            if [ -d "$d" ] && [ ! -e "$d/.git" ]; then
+              git -C "$d" init -q 2>/dev/null || true
+            fi
+          done
+          git -C bootable/recovery rev-parse --git-dir 2>&1 | head -1
+
       # ---------------------------------------------------------------- build
       # Run #17 reached the compile for the first time and was killed with
       # exit 143 (SIGTERM) after five minutes:
@@ -336,25 +348,34 @@ jobs:
           cd "$SRC"
           export TMPDIR=/build/tmp
           mkdir -p "$TMPDIR"
-          set -o pipefail
-          (
-            while true; do
-              sleep 120
-              echo "[watchdog $(date -u +%T)] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}') swap=$(free -m | awk '/Swap:/{print $4"MB free"}')"
-            done
-          ) &
-          WD=$!
+          # Do NOT pipe mka into tail. Runs #17 and #18 both died with exit 143
+          # (SIGTERM) while disk (61G free), memory (7.1G) and swap (2.9G) were
+          # all healthy, and piped output hid every progress line until exit.
+          # Log to a file, stream progress from the watchdog, print the tail at
+          # the end.
           source build/envsetup.sh
           lunch "$LUNCH_TARGET"
           get_build_var TARGET_PRODUCT || true
           get_build_var TARGET_BUILD_VARIANT || true
-          # Cap parallelism: default is nproc*2+2 for ninja, far beyond what
-          # 16 GB supports for soong + C++ compile jobs.
           export SOONG_UI_JOB_LIMIT=4
-          mka -j4 adbd recoveryimage 2>&1 | tail -300
-          rc=${PIPESTATUS[0]}
-          kill $WD 2>/dev/null || true
-          echo "[watchdog final] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
+          set +e
+          mka -j4 adbd recoveryimage > /build/build.log 2>&1 &
+          BUILD_PID=$!
+          (
+            while kill -0 "$BUILD_PID" 2>/dev/null; do
+              sleep 120
+              echo "[watchdog $(date -u +%T)] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}') swap=$(free -m | awk '/Swap:/{print $4"MB free"}') out=$(du -sh "$SRC/out" 2>/dev/null | cut -f1)"
+              tail -3 /build/build.log
+            done
+          ) &
+          WD=$!
+          wait "$BUILD_PID"
+          rc=$?
+          kill "$WD" 2>/dev/null || true
+          set -e
+          echo "===== last 200 lines of the build log ====="
+          tail -200 /build/build.log
+          echo "[final] rc=$rc disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
           exit $rc
 
       # ------------------------------------------------------------ artefacts
@@ -378,6 +399,18 @@ jobs:
           name: recovery-image-${{ github.run_number }}
           path: artefacts/
           retention-days: 30
+
+      # Always keep the full mka log, not just the 200-line tail: the API can
+      # only download logs after the job ends, and an artifact survives even
+      # when the runner is killed.
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: /build/build.log
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Create prerelease
         if: success()
