@@ -261,7 +261,6 @@ jobs:
           done
           echo "===== sync summary ====="
           df -h / | tail -1
-          df -h / | tail -1
           du -sh "$SRC" 2>/dev/null || true
           du -sh "$SRC/.repo" 2>/dev/null || true
           if [ "$ok" -ne 1 ]; then
@@ -272,6 +271,12 @@ jobs:
           test -f build/envsetup.sh || { echo "::error::incomplete tree: build/envsetup.sh missing"; exit 1; }
           test -d bionic               || { echo "::error::incomplete tree: bionic missing"; exit 1; }
           test -d build/soong          || { echo "::error::incomplete tree: build/soong missing"; exit 1; }
+
+          # Run #17 synced successfully but left only 8 GB free of 145 GB:
+          #   /build/source       112G
+          #   /build/source/.repo  55G
+          # The object store is reclaimed by its own later step, right before
+          # the compile, so the overlay below still has room to run.
           echo "tree looks usable"
 
       # --------------------------------------------------------------- device
@@ -294,10 +299,38 @@ jobs:
           df -h / | tail -1
 
       # ---------------------------------------------------------------- build
-      # TMPDIR is moved onto the big volume: soong/ninja scratch files default
-      # to /tmp, which lives on the small root fs and was a suspect in the
-      # "runner lost communication" kills. A background watchdog reports disk
-      # pressure so a future failure is explainable instead of silent.
+      # Run #17 reached the compile for the first time and was killed with
+      # exit 143 (SIGTERM) after five minutes:
+      #   [watchdog 13:33:58] root=6.6G mem=6935MB avail
+      #   [watchdog 13:35:58] root=6.4G mem=1251MB avail
+      # Two constraints at once: only ~7 GB left on disk (out/ needs tens of
+      # GB) and the runner's 16 GB RAM collapsing under parallel soong/ninja.
+      #
+      # 1) Reclaim disk: .repo was 55 GB of the 112 GB tree and the build never
+      #    reads it after checkout.
+      # 2) Bound the scheduler: 4 vCPU / 16 GB cannot run the default job count
+      #    for soong + ninja without thrashing. Cap both and enlarge swap.
+      - name: Reclaim disk and set up swap before compiling
+        run: |
+          cd "$SRC"
+          echo "=== before reclaim ==="
+          df -h /
+          du -sh .repo 2>/dev/null || true
+          rm -rf .repo/project-objects .repo/projects
+          find .repo -maxdepth 3 -type d -name objects -exec rm -rf {} + 2>/dev/null || true
+          echo "=== after reclaim ==="
+          df -h /
+          du -sh .repo 2>/dev/null || true
+          # extra swap for the build (GitHub's /mnt swap was removed by the
+          # maximize step earlier in some runs; create our own)
+          if ! swapon --show | grep -q .; then
+            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+          free -h
+
       - name: Build AERA recovery
         run: |
           cd "$SRC"
@@ -307,7 +340,7 @@ jobs:
           (
             while true; do
               sleep 120
-              echo "[watchdog $(date -u +%T)] root=$(df -h / | awk 'NR==2{print $4}') aosp=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
+              echo "[watchdog $(date -u +%T)] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}') swap=$(free -m | awk '/Swap:/{print $4"MB free"}')"
             done
           ) &
           WD=$!
@@ -315,9 +348,13 @@ jobs:
           lunch "$LUNCH_TARGET"
           get_build_var TARGET_PRODUCT || true
           get_build_var TARGET_BUILD_VARIANT || true
-          mka adbd recoveryimage 2>&1 | tail -250
+          # Cap parallelism: default is nproc*2+2 for ninja, far beyond what
+          # 16 GB supports for soong + C++ compile jobs.
+          export SOONG_UI_JOB_LIMIT=4
+          mka -j4 adbd recoveryimage 2>&1 | tail -300
           rc=${PIPESTATUS[0]}
           kill $WD 2>/dev/null || true
+          echo "[watchdog final] disk=$(df -h / | awk 'NR==2{print $4}') mem=$(free -m | awk '/Mem:/{print $7"MB avail"}')"
           exit $rc
 
       # ------------------------------------------------------------ artefacts
