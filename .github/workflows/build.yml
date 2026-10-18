@@ -108,7 +108,9 @@ jobs:
           # retry a few times: android.googlesource.com occasionally 429s
           for i in 1 2 3; do
             echo "attempt $i ..."
-            repo sync -c --force-sync --no-tags -j"$(nproc --all)" && break
+            # the manifest pins aosp projects to refs/tags/android-16.0.0_r1,
+            # so tags must be fetched.
+            repo sync -c --force-sync -j"$(nproc --all)" && break
             echo "sync attempt $i failed; retrying in 30s"
             sleep 30
           done
