@@ -1,0 +1,10 @@
+# Build outputs and local artefacts. The device tree is the deliverable; the
+# compiled recovery.img comes from CI and is downloaded, never committed (it is
+# exactly the size of the recovery partition and would bloat every clone).
+out/
+*.img
+!device/**/*.img
+
+# Local scratch
+*.log
+_aera/

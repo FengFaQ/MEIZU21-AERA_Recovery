@@ -2,8 +2,21 @@
 # (aera-16.0 etc/init.rc: "rmdir /sbin", "symlink /system/bin /sbin"). Both
 # reference AERA trees (oneplus_infiniti, xiaomi_garnet) ship this exact value, and
 # on this device /sbin/... resolves away harmlessly. Do not "fix" it.
+#
+# oneshot + disabled are REQUIRED, not cosmetic:
+#   * without oneshot, init restarts the script every time it exits, so the
+#     "Starting KeyMint / Current boot slot: _b" lines repeat forever (that is
+#     the endless scroll seen in the recovery log), and every restart sends
+#     another ctl.start to KeyMint;
+#   * without disabled, init also starts it on boot, racing the
+#     property:twrp.modules.loaded trigger in init.recovery.qcom.rc that is
+#     supposed to run it only after the version properties have been repointed.
+# KeyMint being torn down and restarted in a loop is also why keystore2 never
+# gets a stable connection and userdata decryption fails.
 service start_crypto_services /vendor/bin/start_crypto_services.sh
     user root
     group root
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
     seclabel u:r:recovery:s0
+    disabled
+    oneshot

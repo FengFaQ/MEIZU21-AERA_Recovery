@@ -1,0 +1,56 @@
+#
+# Wi-Fi bring-up for the Meizu 21 (m2461).
+#
+# This file must be imported explicitly from init.recovery.qcom.rc
+# ("import /init.recovery.wifi.rc"): init only auto-imports
+# /vendor/etc/init/*.rc, so a root-level rc file is otherwise dead code.
+#
+# Device-specific values, both read out of the stock images:
+#   platform node : qcom,cnss-kiwi@b0000000   (dtbo fragments 45/62/65/80/82/85/86/88)
+#   main driver   : qca_cld3_kiwi_v2.ko       (vendor_dlkm)
+#   board data    : /firmware/image/kiwi/bdwlan_m2461.elf  (modem partition)
+#
+# The CNSS platform driver does not finish probing until its firmware is
+# readable, and it signals that by creating /sys/class/net/wlan0. In the stock
+# system /vendor/firmware_mnt is a link to /firmware, which init.recovery.qcom.rc
+# recreates, and the modem partition is mounted during "on fs" so the board data
+# is available before the driver probes.
+#
+# NOTE: no shell $ in the service lines below. init expands $name and ${name}
+# as property references before the command is executed, so a shell variable
+# such as $n or $((n+1)) would be silently replaced with an empty string.
+#
+
+on property:twrp.modules.loaded=true
+    # The driver waits for this flag before it fetches firmware from the
+    # filesystem; without it probe never completes and wlan0 never appears.
+    chmod 222 /sys/bus/platform/drivers/cnss2/b0000000.qcom,cnss-kiwi/fs_ready
+    write /sys/bus/platform/drivers/cnss2/b0000000.qcom,cnss-kiwi/fs_ready 1
+    setprop sys.aera.wlan.up 0
+    start aera-wlan-ready
+
+on property:wifi.driver.ready=true
+    mkdir /tmp/recovery 0777 root root
+    mkdir /tmp/recovery/sockets 0777 root root
+    start wpa_supplicant
+
+on property:sys.aera.wlan.up=1
+    setprop sys.aera.wlan.up 0
+    mkdir /tmp/recovery 0777 root root
+    mkdir /tmp/recovery/sockets 0777 root root
+    start wpa_supplicant
+
+service wpa_supplicant /system/bin/wpa_supplicant -Dnl80211 -iwlan0 -O/tmp/recovery/sockets -c/vendor/etc/wifi/wpa_supplicant.conf
+    disabled
+    seclabel u:r:recovery:s0
+    stdio_to_kmsg
+
+# Waits for the driver to publish wlan0, then unblocks wpa_supplicant.
+# Bounded to ~30 s so a missing WLAN chip cannot hang the boot.
+service aera-wlan-ready /system/bin/sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if [ -e /sys/class/net/wlan0 ]; then setprop wifi.driver.ready true; exit 0; fi; sleep 1; done; setprop wifi.driver.ready false"
+    disabled
+    oneshot
+    user root
+    group root
+    seclabel u:r:recovery:s0
+    stdio_to_kmsg

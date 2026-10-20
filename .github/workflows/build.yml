@@ -311,6 +311,24 @@ jobs:
           find bootable/recovery vendor/recovery external/lvgl \
                -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} + 2>/dev/null || true
           chmod +x bootable/recovery/prebuilt/relink.sh 2>/dev/null || true
+
+          # The stock vendor image ships these two Wi-Fi files as symlinks, and
+          # the CNSS driver resolves them at runtime:
+          #   WCNSS_qcom_cfg.ini -> /vendor/etc/wifi/kiwi_v2/WCNSS_qcom_cfg.ini
+          #   wlan_mac.bin       -> /mnt/vendor/persist/kiwi_v2/wlan_mac.bin
+          # They cannot live in this repository as symlinks (the checkout runs
+          # on Windows, where git symlinks are off), so recreate them here.
+          echo "===== wifi firmware symlinks ====="
+          WIFIDIR="$DEVICE_DIR/recovery/root/vendor/firmware/wlan/qca_cld/kiwi_v2"
+          if [ -d "$WIFIDIR" ]; then
+            ln -sfn /vendor/etc/wifi/kiwi_v2/WCNSS_qcom_cfg.ini "$WIFIDIR/WCNSS_qcom_cfg.ini"
+            ln -sfn /mnt/vendor/persist/kiwi_v2/wlan_mac.bin      "$WIFIDIR/wlan_mac.bin"
+            ls -la "$WIFIDIR"
+          fi
+          echo "===== wifi assets ====="
+          ls -la "$DEVICE_DIR/recovery/root/vendor/lib/modules" 2>/dev/null | head -5
+          ls -la "$DEVICE_DIR/recovery/root/vendor/etc/wifi" 2>/dev/null
+          du -sh "$DEVICE_DIR/recovery/root/vendor/lib/modules" 2>/dev/null || true
           ls -l bootable/recovery/prebuilt/relink.sh
 
           # envsetup.sh and the build scripts shell out to git here. Without a
@@ -425,6 +443,50 @@ jobs:
           name: recovery-image-${{ github.run_number }}
           path: artefacts/
           retention-days: 30
+
+      # The local machine cannot reach objects.githubusercontent.com, so release
+      # assets and action artifacts cannot be downloaded directly. Mirror the
+      # output onto a `dist` branch as well and fetch it over SSH, which is the
+      # same trick the MEIZU21GKI project uses.
+      #
+      # GitHub hard-limits a single git blob to 100 MB; recovery.img must stay
+      # under that (the recovery partition itself is 100 MiB). The step reports
+      # the exact size and refuses to push anything at or above the limit so the
+      # failure is explicit instead of a rejected push.
+      - name: Mirror artefacts to the dist branch
+        if: success()
+        run: |
+          set -euo pipefail
+          IMG="$GITHUB_WORKSPACE/artefacts/recovery.img"
+          [ -f "$IMG" ] || { echo "::error::recovery.img missing"; exit 1; }
+          SIZE=$(stat -c%s "$IMG")
+          echo "recovery.img size: $SIZE bytes"
+          if [ "$SIZE" -ge 104857600 ]; then
+            echo "::error::recovery.img is ${SIZE} bytes, at or above the 100 MB git blob limit"
+            exit 1
+          fi
+          mkdir -p /tmp/distpush
+          cd /tmp/distpush
+          git init -q -b dist
+          git config user.email "action@github.com"
+          git config user.name "github-actions[bot]"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          cp "$IMG" .
+          cp "$GITHUB_WORKSPACE/artefacts/recovery.img.sha256" . 2>/dev/null || true
+          {
+            echo "run=${{ github.run_number }}"
+            echo "sha=${{ github.sha }}"
+            echo "size=$SIZE"
+            echo "kernel=6.1.25-android14-11-maybe-dirty"
+            echo "device=meizu21/m2461"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > config.txt
+          git add -A
+          git commit -q -m "dist: recovery.img run ${{ github.run_number }} (${SIZE} bytes, sha ${{ github.sha }})"
+          git push -f origin dist:dist
+          echo "recovery.img mirrored to the dist branch"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Always keep the full mka log, not just the 200-line tail: the API can
       # only download logs after the job ends, and an artifact survives even

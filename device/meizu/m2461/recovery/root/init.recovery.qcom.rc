@@ -34,6 +34,12 @@
 
 # /etc is a symlink to /system/etc in AERA's recovery init; vendor rc files are
 # imported from /vendor/etc/init by init itself, nothing to import here.
+#
+# init.recovery.wifi.rc lives at the ramdisk root, and init only auto-imports
+# /vendor/etc/init/*.rc, so without this line the whole Wi-Fi bring-up block
+# (fs_ready poke, wlan0 wait, wpa_supplicant start) is dead code. The AERA
+# reference tree has the same import as its first statement.
+import /init.recovery.wifi.rc
 
 on init
     setprop prepdecrypt.setpatch true
@@ -54,10 +60,37 @@ on fs
     # Its SSD listener opens by-name/ssd, which ueventd may not have made yet.
     wait /dev/block/bootdevice/by-name/ssd 10
     start vendor.qseecomd
+
+    # Mount the modem partition at /firmware as early as possible.
+    #
+    # The kernel firmware loader resolves /firmware/image/<name>, and the modem
+    # partition (modem_a = sde6) is where adsp, ipa and the WLAN board data
+    # live. This used to happen only on twrp.modules.loaded, which is far too
+    # late: dmesg shows adsp/ipa already failing at ~2.4 s with
+    #   Direct firmware load for adsp.b01 failed with error -2
+    # and cnss2 therefore never finds its WLAN firmware. Mounting it during
+    # "on fs" puts /firmware in place before those drivers probe.
+    mkdir /firmware 0755 root root
+    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
+
+    # The stock layout also exposes the firmware through
+    # /vendor/firmware_mnt/image. In recovery /vendor is the ramdisk overlay,
+    # so that path does not exist; recreate it as a link to the mounted
+    # partition, which is what the TWRP tree achieved with
+    # "umount /vendor; symlink /firmware /vendor/firmware_mnt".
+    mkdir /vendor/firmware_mnt 0755 root root
+    mount none /firmware /vendor/firmware_mnt bind rec
+
+    # persist holds per-device calibration data, including the WLAN MAC that
+    # /vendor/firmware/wlan/qca_cld/kiwi_v2/wlan_mac.bin points at. The old code
+    # bound a tmpfs over /mnt/vendor/persist, which hid the real partition and
+    # left the MAC unreadable. Mount the real partition instead; a failure here
+    # is logged by init and does not abort the boot, which is why this is done
+    # with mount rather than a fstab entry (TWRP's parser does not know every
+    # flag and a bad fstab line can stop recovery from starting).
     mkdir /mnt/vendor 0775 shell system
     mkdir /mnt/vendor/persist 0775 shell system
-    mkdir /tmp/persist 0775 shell system
-    mount none /tmp/persist /mnt/vendor/persist bind rec
+    mount ext4 /dev/block/bootdevice/by-name/persist /mnt/vendor/persist noatime,nosuid,nodev,barrier=1
     # DEVIATION: the TWRP tree calls a private builtin here (`install_keyring`) that
     # does not exist in AERA's init (AERA-Recovery/android_system_core aera-16.0,
     # commit 245ef44, init/builtins.cpp keyword table has no such command; AERA's
@@ -79,9 +112,6 @@ on property:twrp.modules.loaded=true
     # KeyMint stays down until this has pointed the version properties at the
     # installed system, so start it as early as the mapper nodes allow.
     start start_crypto_services
-    # Mount firmware
-    mkdir /firmware
-    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
     # Load ADSP firmware for PMIC
     wait /sys/kernel/boot_adsp/boot
     write /sys/kernel/boot_adsp/boot 1
