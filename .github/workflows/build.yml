@@ -449,10 +449,14 @@ jobs:
       # output onto a `dist` branch as well and fetch it over SSH, which is the
       # same trick the MEIZU21GKI project uses.
       #
-      # GitHub hard-limits a single git blob to 100 MB; recovery.img must stay
-      # under that (the recovery partition itself is 100 MiB). The step reports
-      # the exact size and refuses to push anything at or above the limit so the
-      # failure is explicit instead of a rejected push.
+      # GitHub hard-limits a single git blob to 100 MB, but recovery.img is
+      # padded to exactly 100 MiB (the recovery partition size), i.e. at/above
+      # the limit, so pushing it raw is always rejected. Compress it with gzip
+      # first (the image compresses to ~58 MB) and push recovery.img.gz instead;
+      # decompress on the receiving side with `gunzip recovery.img.gz`. If even
+      # the compressed image is unexpectedly too large, skip the push with a
+      # warning rather than failing the whole build -- the ordinary artifact
+      # upload above is the primary delivery path and has already succeeded.
       - name: Mirror artefacts to the dist branch
         if: success()
         run: |
@@ -460,10 +464,15 @@ jobs:
           IMG="$GITHUB_WORKSPACE/artefacts/recovery.img"
           [ -f "$IMG" ] || { echo "::error::recovery.img missing"; exit 1; }
           SIZE=$(stat -c%s "$IMG")
-          echo "recovery.img size: $SIZE bytes"
-          if [ "$SIZE" -ge 104857600 ]; then
-            echo "::error::recovery.img is ${SIZE} bytes, at or above the 100 MB git blob limit"
-            exit 1
+          echo "recovery.img size: $SIZE bytes (raw)"
+          # recovery.img is padded to the full 100 MiB partition, which is at or
+          # above GitHub's 100 MB single-blob limit. gzip it before pushing.
+          gzip -9 -c "$IMG" > /tmp/recovery.img.gz
+          GZ_SIZE=$(stat -c%s /tmp/recovery.img.gz)
+          echo "recovery.img.gz size: $GZ_SIZE bytes"
+          if [ "$GZ_SIZE" -ge 100000000 ]; then
+            echo "::warning::recovery.img.gz is ${GZ_SIZE} bytes, still at or above the 100 MB git blob limit; skipping dist mirror (the recovery image artifact was uploaded successfully)"
+            exit 0
           fi
           mkdir -p /tmp/distpush
           cd /tmp/distpush
@@ -471,20 +480,22 @@ jobs:
           git config user.email "action@github.com"
           git config user.name "github-actions[bot]"
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          cp "$IMG" .
+          cp /tmp/recovery.img.gz .
           cp "$GITHUB_WORKSPACE/artefacts/recovery.img.sha256" . 2>/dev/null || true
           {
             echo "run=${{ github.run_number }}"
             echo "sha=${{ github.sha }}"
             echo "size=$SIZE"
+            echo "gz_size=$GZ_SIZE"
             echo "kernel=6.1.25-android14-11-maybe-dirty"
             echo "device=meizu21/m2461"
             echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "note=recovery.img.gz - decompress with gunzip to obtain recovery.img"
           } > config.txt
           git add -A
-          git commit -q -m "dist: recovery.img run ${{ github.run_number }} (${SIZE} bytes, sha ${{ github.sha }})"
+          git commit -q -m "dist: recovery.img.gz run ${{ github.run_number }} (${GZ_SIZE} bytes gz, sha ${{ github.sha }})"
           git push -f origin dist:dist
-          echo "recovery.img mirrored to the dist branch"
+          echo "recovery.img.gz mirrored to the dist branch"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
