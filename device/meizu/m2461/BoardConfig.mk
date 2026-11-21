@@ -229,21 +229,21 @@ AERA_INPUT_BLACKLIST := "hbtp_vm"
 
 # Vendor ramdisk modules.
 #
-# Touch (goodix_ts), Meizu key/touch drivers, NFC and the ADSP loader come from
-# the device's own vendor_boot, hence AERA_LOAD_VENDOR_BOOT_MODULES below.
+# BOOT-HANG FIX (2026-11-21): the 13 CNSS/WLAN modules below were being
+# insmod'd synchronously during early boot (Load_Vendor_Modules ->
+# Modprobe.LoadListedModules). cnss2.ko / qca_cld3_kiwi_v2.ko run a blocking
+# init() that waits for CNSS firmware readiness; the fs_ready flag is only
+# written later, on property:twrp.modules.loaded=true -- which only fires AFTER
+# insmod returns. That circular wait hangs the boot at the logo until the
+# watchdog reboots into recovery. This reproduces on the clean 2db0572 tree
+# (before any of our fixes), and reverting to the pre-2db0572 seven-module list
+# restores a booting recovery.
 #
-# Wi-Fi was originally left out on the theory that the CNSS drivers live in
-# vendor_dlkm and could not be loaded, which is why the shipped recovery had no
-# wlan0 and the Wi-Fi panel stayed dead. The modules are now shipped inside
-# this ramdisk (recovery/root/vendor/lib/modules/, extracted from the stock
-# vendor_dlkm) and listed here, which is exactly how the AERA reference tree
-# does it for OnePlus. Load order matters: cfg80211/mac80211 first, then the
-# cnss prealloc/utils/ipc/nl helpers, then cnss2, and the platform driver last.
-#
-# Meizu 21 uses the Kiwi v2 WLAN chip (qca_cld3_kiwi_v2.ko); the reference tree
-# uses peach_v2 for OnePlus. rfkill is built into the 6.1 kernel on this device
-# and has no separate module.
-AERA_LOAD_VENDOR_MODULES := "adsp_loader_dlkm.ko goodix_ts.ko cs_press_m68.ko cs_press_f71.ko nxp-nci.ko stm_st54se_gpio.ko stm_nfc_i2c.ko cfg80211.ko mac80211.ko cnss_prealloc.ko cnss_utils.ko cnss_plat_ipc_qmi_svc.ko cnss_nl.ko wlan_firmware_service.ko cnss2.ko qca_cld3_kiwi_v2.ko gsim.ko rmnet_mem.ko ipam.ko rmnet_wlan.ko"
+# Restored to the last-known-good list from commit 6345ea720690. The CNSS/WLAN
+# .ko files remain packaged in recovery/root/vendor/lib/modules/ but are NOT
+# auto-loaded here; they can be re-enabled via a post-decrypt path once device
+# logs confirm which module's init() blocks.
+AERA_LOAD_VENDOR_MODULES := "adsp_loader_dlkm.ko goodix_ts.ko cs_press_m68.ko cs_press_f71.ko nxp-nci.ko stm_st54se_gpio.ko stm_nfc_i2c.ko"
 AERA_LOAD_VENDOR_MODULES_EXCLUDE_GKI := true
 AERA_LOAD_VENDOR_BOOT_MODULES := true
 
