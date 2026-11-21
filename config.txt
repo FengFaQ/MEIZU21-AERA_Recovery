@@ -1,0 +1,8 @@
+run=27
+sha=5f8442ee2bb89f0a793d51b4a190b93e7c71c574
+size=104857600
+gz_size=57437706
+kernel=6.1.25-android14-11-maybe-dirty
+device=meizu21/m2461
+built=2026-11-21T09:37:35Z
+note=recovery.img.gz - decompress with gunzip to obtain recovery.img
