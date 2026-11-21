@@ -101,6 +101,14 @@ on fs
     # be re-tested on the device.
 
 on boot
+    # [PATCHED - optional hardening, ported from skyward-meizu21.rc]
+    # The reference does `on boot: start vendor.boot-qti` so the stock boot HAL
+    # is up for nonblocking Binder lookups (fastbootd resolves the boot / logical
+    # partition HAL through binder). The project starts it earlier on `on init`;
+    # if that early launch raced the binder/service manager and exited, this
+    # boot-time re-trigger restores it. `start` on a running service is a no-op
+    # in init, so this is safe even when the early launch succeeded.
+    start vendor.boot-qti
     setprop sys.usb.config adb
 
 # qseecomd is up, so the HALs that reach a trustlet through it can follow.

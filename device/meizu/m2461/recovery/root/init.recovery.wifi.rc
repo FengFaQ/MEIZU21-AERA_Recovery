@@ -1,5 +1,5 @@
 #
-# Wi-Fi bring-up for the Meizu 21 (m2461).
+# Wi-Fi bring-up for the Meizu 21 (m2461).  [PATCHED - ported from skyward-recovery.img]
 #
 # This file must be imported explicitly from init.recovery.qcom.rc
 # ("import /init.recovery.wifi.rc"): init only auto-imports
@@ -16,14 +16,47 @@
 # recreates, and the modem partition is mounted during "on fs" so the board data
 # is available before the driver probes.
 #
+# ---------------------------------------------------------------------------
+# FIX 1 (WiFi restore) - CNSS fs_ready path  [root cause]
+# ---------------------------------------------------------------------------
+# The reference recovery (skyward-recovery.img -> skyward/device.toml) releases
+# the CNSS driver with:
+#     [wlan]
+#     modules = ["rfkill", "qca_cld3_kiwi_v2"]
+#     writes  = [{ path = "/sys/kernel/cnss/fs_ready", value = "1" }]
+# The project previously wrote ONLY the board-specific node
+# /sys/bus/platform/drivers/cnss2/b0000000.qcom,cnss-kiwi/fs_ready. On the
+# SM8650 / kiwi_v2 kernel that is not the node the driver polls, so probe never
+# completed, wlan0 never appeared, aera-wlan-ready timed out with
+# wifi.driver.ready=false, wpa_supplicant never started and WiFi could not be
+# restored. We now write the canonical /sys/kernel/cnss/fs_ready first and keep
+# the old node as a fallback for other kernel variants. AOSP init logs a
+# missing write target but does not abort the action block, so writing both is
+# safe.
+#
+# FIX 2 (WiFi restore) - supplicant binary comes from the mounted real system
+# ---------------------------------------------------------------------------
+# The reference runs the supplicant from the real (mounted) vendor partition:
+#     supplicant = "/vendor/bin/hw/wpa_supplicant"
+#     libraries  = ["/system/lib64", "/vendor/lib64"]
+# The recovery ramdisk ships no wpa_supplicant binary - only config files - so
+# the original /system/bin/wpa_supplicant may not exist at runtime. The service
+# below keeps the service NAME "wpa_supplicant" (wlan.cpp waits on the property
+# init.svc.wpa_supplicant, so the name must not change) but wraps the executable
+# in a shell that exec()s the vendor HAL-supplicant when present, falling back
+# to the recovery copy. Both binaries accept the same -D/-i/-O/-c arguments,
+# so the C++ AeraSupplicantLink control-socket contract is unchanged.
+#
 # NOTE: no shell $ in the service lines below. init expands $name and ${name}
 # as property references before the command is executed, so a shell variable
 # such as $n or $((n+1)) would be silently replaced with an empty string.
 #
 
 on property:twrp.modules.loaded=true
-    # The driver waits for this flag before it fetches firmware from the
-    # filesystem; without it probe never completes and wlan0 never appears.
+    # Canonical CNSS "firmware ready" flag (from the reference device.toml).
+    chmod 222 /sys/kernel/cnss/fs_ready
+    write /sys/kernel/cnss/fs_ready 1
+    # Legacy board-specific node, kept as a fallback for other kernel variants.
     chmod 222 /sys/bus/platform/drivers/cnss2/b0000000.qcom,cnss-kiwi/fs_ready
     write /sys/bus/platform/drivers/cnss2/b0000000.qcom,cnss-kiwi/fs_ready 1
     setprop sys.aera.wlan.up 0
@@ -40,7 +73,11 @@ on property:sys.aera.wlan.up=1
     mkdir /tmp/recovery/sockets 0777 root root
     start wpa_supplicant
 
-service wpa_supplicant /system/bin/wpa_supplicant -Dnl80211 -iwlan0 -O/tmp/recovery/sockets -c/vendor/etc/wifi/wpa_supplicant.conf
+# Picks the supplicant binary the same way the reference does: prefer the
+# AIDL-capable HAL-supplicant from the mounted real /vendor, fall back to the
+# recovery build's copy. exec() replaces the shell, so init tracks the real
+# supplicant process under init.svc.wpa_supplicant (the name wlan.cpp waits on).
+service wpa_supplicant /system/bin/sh -c "if [ -x /vendor/bin/hw/wpa_supplicant ]; then exec /vendor/bin/hw/wpa_supplicant -Dnl80211 -iwlan0 -O/tmp/recovery/sockets -c/vendor/etc/wifi/wpa_supplicant.conf; else exec /system/bin/wpa_supplicant -Dnl80211 -iwlan0 -O/tmp/recovery/sockets -c/vendor/etc/wifi/wpa_supplicant.conf; fi"
     disabled
     seclabel u:r:recovery:s0
     stdio_to_kmsg

@@ -2,13 +2,45 @@
 # All Rights Reserved.
 # Confidential and Proprietary - Qualcomm Technologies, Inc.
 #
-# Meizu 21 (m2461, SM8650) - ported from the verified TWRP recovery tree.
+# Meizu 21 (m2461, SM8650) - [PATCHED - aligned to skyward-recovery.img]
 # android.hardware.fastboot.IFastboot/default backs AERA fastbootd
 # (AERA_INCLUDE_FASTBOOTD / AERA_AB_DEVICE_WITH_RECOVERY_PARTITION).
+#
+# ---------------------------------------------------------------------------
+# FIX 3 (fastbootd) - AIDL fastboot HAL service identity
+# ---------------------------------------------------------------------------
+# The reference recovery's
+#   system/etc/init/android.hardware.fastboot-service.example_recovery.rc:
+#     service vendor.fastboot-default /system/bin/hw/android.hardware.fastboot-service.example_recovery
+#         class hal
+#         user system
+#         group system
+#         seclabel u:r:hal_fastboot_default:s0
+#         interface aidl android.hardware.fastboot.IFastboot/default
+#
+# The project had this service running as root:root with the generic
+# u:r:recovery:s0 domain. fastbootd retrieves the HAL through the binder
+# service android.hardware.fastboot.IFastboot/default; a service label that
+# lacks the standard hal_fastboot binder permissions can register but not be
+# retrieved, producing the failure visible in the reference fastbootd binary:
+#   "AIDL fastboot service is declared, but it cannot be retrieved."
+#   "Fastboot HAL not found"
+# We align the service to the reference: canonical hal_fastboot_default domain
+# (a standard AOSP Android 16 sepolicy domain, confirmed present in the
+# reference's compiled sepolicy) and the system/system identity it uses.
+#
+# Two deliberate differences from the reference binary path / env:
+#   * Path stays /vendor/bin/hw/... because that is where this project's build
+#     actually installs the binary (device tree recovery/root/vendor/bin/hw/).
+#     The reference installs the same binary under /system/bin/hw/.
+#   * LD_LIBRARY_PATH is KEPT. The reference omits it because its binary lives
+#     under /system with a complete linker config; a recovery ramdisk may not
+#     resolve android.hardware.fastboot-V1-ndk.so without this hint. It is a
+#     harmless search-path hint when the linker config is complete.
 service vendor.fastboot-default /vendor/bin/hw/android.hardware.fastboot-service.example_recovery
     class hal
-    user root
-    group root
+    user system
+    group system
     setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib64/hw:/system/lib64:/sbin
-    seclabel u:r:recovery:s0
+    seclabel u:r:hal_fastboot_default:s0
     interface aidl android.hardware.fastboot.IFastboot/default
